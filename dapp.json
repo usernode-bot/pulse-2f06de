@@ -4,6 +4,7 @@
   "tests": [
     { "path": "/", "name": "Feed renders", "expectSelector": "#feed-tabs" },
     { "path": "/", "name": "Trending tab present", "expectText": "Trending" },
+    { "path": "/", "name": "Live Beats tab present", "expectText": "Live Beats" },
     { "path": "/", "name": "Following tab present", "expectText": "Following" },
     { "path": "/", "name": "Compose box present", "expectSelector": "#compose-box" }
   ]

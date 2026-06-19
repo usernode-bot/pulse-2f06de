@@ -448,6 +448,10 @@ function renderFeedTabs() {
         class="flex-1 py-4 text-sm text-center transition-colors ${APP.currentTab === 'trending' ? 'tab-active' : 'tab-inactive'}">
         Trending
       </button>
+      <button id="tab-live" onclick="switchTab('live')"
+        class="flex-1 py-4 text-sm text-center transition-colors ${APP.currentTab === 'live' ? 'tab-active' : 'tab-inactive'}">
+        Live Beats
+      </button>
       <button id="tab-following" onclick="switchTab('following')"
         class="flex-1 py-4 text-sm text-center transition-colors ${APP.currentTab === 'following' ? 'tab-active' : 'tab-inactive'}">
         Following
@@ -458,10 +462,10 @@ function renderFeedTabs() {
 
 function switchTab(tab) {
   APP.currentTab = tab;
-  const tEl = document.getElementById('tab-trending');
-  const fEl = document.getElementById('tab-following');
-  if (tEl) tEl.className = `flex-1 py-4 text-sm text-center transition-colors ${tab === 'trending' ? 'tab-active' : 'tab-inactive'}`;
-  if (fEl) fEl.className = `flex-1 py-4 text-sm text-center transition-colors ${tab === 'following' ? 'tab-active' : 'tab-inactive'}`;
+  ['trending', 'live', 'following'].forEach(t => {
+    const el = document.getElementById('tab-' + t);
+    if (el) el.className = `flex-1 py-4 text-sm text-center transition-colors ${tab === t ? 'tab-active' : 'tab-inactive'}`;
+  });
   loadFeedPulses();
 }
 
@@ -481,15 +485,20 @@ async function loadFeedPulses(offset = 0) {
 
   const url = APP.currentTab === 'trending'
     ? `/api/feed/trending?offset=${offset}`
+    : APP.currentTab === 'live'
+    ? `/api/feed/live?offset=${offset}`
     : `/api/feed/following?offset=${offset}`;
   const data = await api(url);
   const pulses = data.pulses || [];
 
   if (offset === 0) {
     if (!pulses.length) {
-      container.innerHTML = APP.currentTab === 'following'
+      const emptyMsg = APP.currentTab === 'following'
         ? `<div class="p-8 text-center"><p class="text-zinc-400 mb-2 font-medium">You're not following anyone yet.</p><p class="text-zinc-500 text-sm">Browse <button class="text-violet-400 hover:underline" onclick="switchTab('trending')">Trending</button> to find people to follow.</p></div>`
+        : APP.currentTab === 'live'
+        ? '<div class="p-8 text-center text-zinc-500">No pulses yet. Be the first to post!</div>'
         : '<div class="p-8 text-center text-zinc-500">No trending pulses yet. Be the first!</div>';
+      container.innerHTML = emptyMsg;
       return;
     }
     container.innerHTML = '';
