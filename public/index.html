@@ -470,7 +470,7 @@ async function renderFeed() {
   main.innerHTML =
     renderComposeBox() +
     renderFeedTabs() +
-    '<div id="feed-pulses" class="flex items-center justify-center h-24 text-zinc-500 text-sm">Loading…</div>';
+    '<div id="feed-pulses"></div>';
   await loadFeedPulses();
 }
 
