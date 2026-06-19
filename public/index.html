@@ -328,14 +328,16 @@ async function handleCompose(type) {
     if (type === 'comment' && pulseId) {
       signMsg = `pulse:v1:comment:${pulseId}:${ts}:${content}`;
       const sig = await signMessage(signMsg);
-      body = { content, signature: sig, sign_message: sig ? signMsg : null, pubkey: APP.me.usernode_pubkey };
+      if (!sig) { showToast('Wallet signing was cancelled — reply not posted.', true); btn.disabled = false; btn.textContent = 'Sign & Post'; return; }
+      body = { content, signature: sig, sign_message: signMsg, pubkey: APP.me.usernode_pubkey };
       res = await api(`/api/pulses/${pulseId}/comments`, { method: 'POST', body });
       if (res.error) throw new Error(res.error);
       showToast('Reply posted!');
     } else {
       signMsg = `pulse:v1:post:${ts}:${content}`;
       const sig = await signMessage(signMsg);
-      body = { content, signature: sig, sign_message: sig ? signMsg : null, pubkey: APP.me.usernode_pubkey };
+      if (!sig) { showToast('Wallet signing was cancelled — pulse not posted.', true); btn.disabled = false; btn.textContent = 'Sign & Post'; return; }
+      body = { content, signature: sig, sign_message: signMsg, pubkey: APP.me.usernode_pubkey };
       res = await api('/api/pulses', { method: 'POST', body });
       if (res.error) throw new Error(res.error);
       showToast('Pulse posted!');
@@ -409,6 +411,7 @@ async function handleLike(pulseId, currentlyLiked) {
       const ts = new Date().toISOString();
       const signMsg = `pulse:v1:like:${pulseId}:${ts}`;
       const sig = await signMessage(signMsg);
+      if (!sig) { showToast('Wallet signing was cancelled — like not recorded.', true); if (btn) btn.disabled = false; return; }
       res = await api(`/api/pulses/${pulseId}/like`, {
         method: 'POST',
         body: { signature: sig, sign_message: sig ? signMsg : null, pubkey: APP.me.usernode_pubkey },
