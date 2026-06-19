@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  
+
   <script>
   // usernode-dev-console@1
   (function () {
@@ -63,59 +63,599 @@
     try { post('info', ['[dev-console ready]'], { kind: 'ready' }); } catch (_) {}
   })();
   </script>
+
   <title>Pulse</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>tailwind.config = { darkMode: 'class' }</script>
+  <script src="https://social-vibecoding.usernodelabs.org/usernode-bridge/v1/bridge.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; }
+    .pulse-card { border-bottom: 1px solid rgb(39 39 42); }
+    .pulse-card:last-child { border-bottom: none; }
+    .tab-active { border-bottom: 2px solid #7c3aed; color: #e4e4e7; }
+    .tab-inactive { border-bottom: 2px solid transparent; color: #71717a; }
+    .avatar { width: 40px; height: 40px; border-radius: 50%; background: #4c1d95; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; color: #ddd6fe; flex-shrink: 0; cursor: pointer; }
+    .avatar-lg { width: 64px; height: 64px; font-size: 22px; }
+    textarea { resize: none; }
+    textarea:focus { outline: none; }
+    .chain-icon { display: inline-flex; align-items: center; }
+    #toast { transition: opacity 0.3s; }
+  </style>
 </head>
-<body class="bg-zinc-950 text-zinc-100 min-h-screen flex flex-col items-center justify-center gap-8 p-4">
-  <h1 class="text-2xl font-bold">Pulse</h1>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen">
 
-  <button id="press-btn" class="w-32 h-32 rounded-full bg-violet-600 hover:bg-violet-500 active:scale-95 transition-all text-white text-xl font-bold shadow-lg shadow-violet-600/30">
-    Press!
-  </button>
+<!-- Toast -->
+<div id="toast" class="fixed top-4 right-4 z-50 bg-zinc-800 text-zinc-100 px-4 py-2 rounded-lg text-sm shadow-lg opacity-0 pointer-events-none"></div>
 
-  <div id="count" class="text-lg text-zinc-400">0 total presses</div>
+<!-- Layout -->
+<div class="flex min-h-screen max-w-5xl mx-auto">
 
-  <div class="w-full max-w-sm">
-    <h2 class="text-sm font-medium text-zinc-500 mb-2 text-center">Leaderboard</h2>
-    <div id="leaderboard" class="space-y-1"></div>
-  </div>
+  <!-- Left Sidebar -->
+  <aside class="w-16 md:w-56 flex flex-col border-r border-zinc-800 sticky top-0 h-screen py-4 px-2 md:px-4 flex-shrink-0">
+    <div class="mb-6 px-1 md:px-2">
+      <span class="text-violet-400 font-black text-2xl">⚡</span>
+      <span class="hidden md:inline ml-1 font-black text-xl text-white">Pulse</span>
+    </div>
+    <nav class="flex flex-col gap-1 flex-1">
+      <button onclick="navigate('feed')" class="flex items-center gap-3 px-2 md:px-3 py-2 rounded-xl hover:bg-zinc-800 transition-colors text-left w-full" id="nav-home">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        <span class="hidden md:inline font-semibold">Home</span>
+      </button>
+      <button onclick="navigate('profile/' + encodeURIComponent(APP.me.username))" class="flex items-center gap-3 px-2 md:px-3 py-2 rounded-xl hover:bg-zinc-800 transition-colors text-left w-full" id="nav-profile">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        <span class="hidden md:inline font-semibold">Profile</span>
+      </button>
+    </nav>
+    <div class="mt-auto px-1 md:px-2 pt-3 border-t border-zinc-800">
+      <p class="hidden md:block text-zinc-500 text-xs truncate" id="sidebar-username"></p>
+    </div>
+  </aside>
 
-  <script>
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('token') || '';
-    const headers = token ? { 'x-usernode-token': token } : {};
+  <!-- Main Content -->
+  <main class="flex-1 min-w-0" id="main-content">
+    <div class="flex items-center justify-center h-40 text-zinc-500">Loading…</div>
+  </main>
 
-    async function loadLeaderboard() {
-      const res = await fetch('/api/leaderboard', { headers });
-      if (!res.ok) return;
-      const { leaderboard } = await res.json();
-      const el = document.getElementById('leaderboard');
-      if (!leaderboard.length) {
-        el.innerHTML = '<p class="text-center text-zinc-600 text-sm">No presses yet</p>';
-        return;
-      }
-      el.innerHTML = leaderboard.map((r, i) =>
-        '<div class="flex justify-between px-3 py-1 rounded ' + (i === 0 ? 'bg-violet-600/20 text-violet-300' : 'text-zinc-400') + '">' +
-        '<span>' + (i + 1) + '. ' + r.username + '</span>' +
-        '<span class="font-mono">' + r.presses + '</span></div>'
-      ).join('');
-      const total = leaderboard.reduce((s, r) => s + parseInt(r.presses), 0);
-      document.getElementById('count').textContent = total + ' total presses';
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+const params = new URLSearchParams(window.location.search);
+const TOKEN = params.get('token') || '';
+const HEADERS = TOKEN ? { 'x-usernode-token': TOKEN, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+
+const APP = {
+  me: { id: null, username: '', usernode_pubkey: null },
+  currentTab: 'trending',
+};
+
+// ── Utils ────────────────────────────────────────────────────────────────────
+function api(path, opts = {}) {
+  return fetch(path, {
+    ...opts,
+    headers: { ...HEADERS, ...(opts.headers || {}) },
+    body: opts.body ? (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body)) : undefined,
+  }).then(r => r.json());
+}
+
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - new Date(ts)) / 1000);
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  if (s < 86400) return Math.floor(s / 3600) + 'h';
+  return Math.floor(s / 86400) + 'd';
+}
+
+function initials(username) {
+  return (username || '?').slice(0, 2).toUpperCase();
+}
+
+function abbrevPubkey(pk) {
+  if (!pk) return '';
+  return pk.slice(0, 6) + '…' + pk.slice(-4);
+}
+
+function showToast(msg, isError) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.opacity = '1';
+  el.style.background = isError ? '#7f1d1d' : '#27272a';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, 3000);
+}
+
+function esc(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── SVG Icons ────────────────────────────────────────────────────────────────
+const ICON_HEART_EMPTY = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>`;
+const ICON_HEART_FILLED = `<svg width="18" height="18" viewBox="0 0 24 24" fill="#8b5cf6" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>`;
+const ICON_COMMENT = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>`;
+const ICON_CHAIN = `<svg class="chain-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>`;
+
+// ── Signing ───────────────────────────────────────────────────────────────────
+async function signMessage(msg) {
+  if (typeof usernode === 'undefined' || !usernode.signMessage) return null;
+  try {
+    return await usernode.signMessage(msg);
+  } catch (e) {
+    console.warn('signMessage failed', e);
+    return null;
+  }
+}
+
+// ── Compose Box ───────────────────────────────────────────────────────────────
+function renderComposeBox(placeholder, onSubmit) {
+  const hasPubkey = !!APP.me.usernode_pubkey;
+  const disabled = !hasPubkey;
+  const title = disabled ? 'Link your Usernode wallet to post.' : '';
+  return `
+    <div id="compose-box" class="p-4 border-b border-zinc-800">
+      <div class="flex gap-3">
+        <div class="avatar" onclick="navigate('profile/' + encodeURIComponent(APP.me.username))">${esc(initials(APP.me.username))}</div>
+        <div class="flex-1">
+          <textarea id="compose-text" rows="3" maxlength="280"
+            class="w-full bg-transparent text-zinc-100 placeholder-zinc-500 text-base border-b border-zinc-700 pb-2 mb-2"
+            placeholder="${esc(placeholder || 'What\'s your pulse?')}"
+            ${disabled ? 'disabled' : ''}
+            oninput="updateComposeCounter(this)"
+          ></textarea>
+          <div class="flex items-center justify-between">
+            <span id="compose-counter" class="text-xs text-zinc-500">0 / 280</span>
+            <button id="compose-btn"
+              class="px-4 py-1.5 rounded-full bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold transition-colors"
+              ${disabled ? 'disabled' : ''}
+              title="${title}"
+              onclick="handleCompose('${esc(onSubmit || 'post')}')"
+            >Sign &amp; Post</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function updateComposeCounter(el) {
+  const n = el.value.length;
+  const counter = document.getElementById('compose-counter');
+  if (counter) {
+    counter.textContent = n + ' / 280';
+    counter.className = 'text-xs ' + (n > 260 ? 'text-red-400' : 'text-zinc-500');
+  }
+}
+
+async function handleCompose(type, pulseId) {
+  const btn = document.getElementById('compose-btn');
+  const ta = document.getElementById('compose-text');
+  const content = ta ? ta.value.trim() : '';
+  if (!content) { showToast('Write something first.', true); return; }
+  if (content.length > 280) { showToast('Too long (max 280 chars).', true); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Signing…';
+
+  try {
+    const ts = new Date().toISOString();
+    let signMsg, body;
+
+    if (type === 'comment' && pulseId) {
+      signMsg = `pulse:v1:comment:${pulseId}:${ts}:${content}`;
+      const sig = await signMessage(signMsg);
+      body = { content, signature: sig, sign_message: sig ? signMsg : null, pubkey: APP.me.usernode_pubkey };
+      const res = await api(`/api/pulses/${pulseId}/comments`, { method: 'POST', body });
+      if (res.error) throw new Error(res.error);
+      showToast('Reply posted!');
+    } else {
+      signMsg = `pulse:v1:post:${ts}:${content}`;
+      const sig = await signMessage(signMsg);
+      body = { content, signature: sig, sign_message: sig ? signMsg : null, pubkey: APP.me.usernode_pubkey };
+      const res = await api('/api/pulses', { method: 'POST', body });
+      if (res.error) throw new Error(res.error);
+      showToast('Pulse posted!');
     }
 
-    document.getElementById('press-btn').addEventListener('click', async () => {
-      try {
-        const res = await fetch('/api/press', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...headers },
-        });
-        if (res.ok) loadLeaderboard();
-        else if (res.status === 401) document.getElementById('count').textContent = 'Sign in to press!';
-      } catch {}
-    });
+    ta.value = '';
+    updateComposeCounter(ta);
 
-    loadLeaderboard();
-  </script>
+    if (type === 'comment' && pulseId) {
+      renderThreadView(pulseId);
+    } else {
+      APP.currentTab = 'following';
+      renderFeed();
+    }
+  } catch (e) {
+    showToast(e.message || 'Failed to post.', true);
+    btn.disabled = false;
+    btn.textContent = 'Sign & Post';
+  }
+}
+
+// ── Pulse Card ────────────────────────────────────────────────────────────────
+function renderPulseCard(p, large) {
+  const liked = p.liked_by_me;
+  const hasSig = !!p.signature;
+  const avatarClass = large ? 'avatar avatar-lg' : 'avatar';
+  return `
+    <div class="pulse-card p-4 hover:bg-zinc-900/40 transition-colors">
+      <div class="flex gap-3">
+        <div class="${avatarClass}" onclick="navigate('profile/${esc(p.username)}')">${esc(initials(p.username))}</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <button class="font-semibold text-zinc-100 hover:underline text-sm" onclick="navigate('profile/${esc(p.username)}')">${esc(p.username)}</button>
+            ${hasSig ? `<span class="text-violet-400 flex items-center gap-1" title="Signed by ${esc(abbrevPubkey(p.usernode_pubkey))}">${ICON_CHAIN}<span class="text-xs hidden sm:inline">${esc(abbrevPubkey(p.usernode_pubkey))}</span></span>` : ''}
+            <span class="text-zinc-500 text-xs">${timeAgo(p.created_at)}</span>
+          </div>
+          <p class="mt-1 text-zinc-100 text-sm leading-relaxed whitespace-pre-wrap break-words">${esc(p.content)}</p>
+          <div class="flex items-center gap-5 mt-3">
+            <button class="flex items-center gap-1.5 text-zinc-500 hover:text-violet-400 transition-colors text-sm"
+              onclick="handleLike(${p.id}, ${liked})"
+              id="like-btn-${p.id}">
+              <span id="like-icon-${p.id}">${liked ? ICON_HEART_FILLED : ICON_HEART_EMPTY}</span>
+              <span id="like-count-${p.id}" class="${liked ? 'text-violet-400' : ''}">${p.like_count || 0}</span>
+            </button>
+            <button class="flex items-center gap-1.5 text-zinc-500 hover:text-sky-400 transition-colors text-sm"
+              onclick="navigate('pulse/${p.id}')">
+              ${ICON_COMMENT}
+              <span>${p.comment_count || 0}</span>
+            </button>
+            ${p.user_id === APP.me.id ? `<button class="text-xs text-zinc-600 hover:text-red-400 transition-colors ml-auto" onclick="handleDelete(${p.id})">Delete</button>` : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function handleLike(pulseId, currentlyLiked) {
+  if (!APP.me.usernode_pubkey) {
+    showToast('Link your Usernode wallet to like posts.', true);
+    return;
+  }
+  const btn = document.getElementById('like-btn-' + pulseId);
+  if (btn) btn.disabled = true;
+
+  try {
+    let res;
+    if (currentlyLiked) {
+      res = await api(`/api/pulses/${pulseId}/like`, { method: 'DELETE' });
+    } else {
+      const ts = new Date().toISOString();
+      const signMsg = `pulse:v1:like:${pulseId}:${ts}`;
+      const sig = await signMessage(signMsg);
+      res = await api(`/api/pulses/${pulseId}/like`, {
+        method: 'POST',
+        body: { signature: sig, sign_message: sig ? signMsg : null, pubkey: APP.me.usernode_pubkey },
+      });
+    }
+    if (res.error) throw new Error(res.error);
+    const newLiked = !currentlyLiked;
+    const iconEl = document.getElementById('like-icon-' + pulseId);
+    const countEl = document.getElementById('like-count-' + pulseId);
+    if (iconEl) iconEl.innerHTML = newLiked ? ICON_HEART_FILLED : ICON_HEART_EMPTY;
+    if (countEl) {
+      countEl.textContent = res.like_count;
+      countEl.className = newLiked ? 'text-violet-400' : '';
+    }
+    if (btn) {
+      btn.setAttribute('onclick', `handleLike(${pulseId}, ${newLiked})`);
+      btn.disabled = false;
+    }
+  } catch (e) {
+    showToast(e.message || 'Failed to like.', true);
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function handleDelete(pulseId) {
+  if (!confirm('Delete this pulse?')) return;
+  const res = await api(`/api/pulses/${pulseId}`, { method: 'DELETE' });
+  if (res.error) { showToast(res.error, true); return; }
+  showToast('Pulse deleted.');
+  const hash = location.hash;
+  if (hash.startsWith('#pulse/')) {
+    navigate('feed');
+  } else {
+    const card = document.querySelector(`[data-pulse-id="${pulseId}"]`);
+    if (card) card.remove();
+  }
+}
+
+// ── Feed ──────────────────────────────────────────────────────────────────────
+function renderFeedTabs() {
+  return `
+    <div id="feed-tabs" class="flex border-b border-zinc-800 sticky top-0 bg-zinc-950 z-10">
+      <button id="tab-trending" onclick="switchTab('trending')"
+        class="flex-1 py-4 text-sm font-semibold text-center transition-colors ${APP.currentTab === 'trending' ? 'tab-active' : 'tab-inactive'}">
+        Trending
+      </button>
+      <button id="tab-following" onclick="switchTab('following')"
+        class="flex-1 py-4 text-sm font-semibold text-center transition-colors ${APP.currentTab === 'following' ? 'tab-active' : 'tab-inactive'}">
+        Following
+      </button>
+    </div>
+  `;
+}
+
+function switchTab(tab) {
+  APP.currentTab = tab;
+  const trendingTab = document.getElementById('tab-trending');
+  const followingTab = document.getElementById('tab-following');
+  if (trendingTab) trendingTab.className = `flex-1 py-4 text-sm font-semibold text-center transition-colors ${tab === 'trending' ? 'tab-active' : 'tab-inactive'}`;
+  if (followingTab) followingTab.className = `flex-1 py-4 text-sm font-semibold text-center transition-colors ${tab === 'following' ? 'tab-active' : 'tab-inactive'}`;
+  loadFeedPulses();
+}
+
+async function renderFeed() {
+  const main = document.getElementById('main-content');
+  main.innerHTML = `
+    <div class="max-w-xl mx-auto">
+      ${renderComposeBox()}
+      ${renderFeedTabs()}
+      <div id="feed-pulses" class="flex items-center justify-center h-24 text-zinc-500 text-sm">Loading…</div>
+    </div>
+  `;
+  await loadFeedPulses();
+}
+
+async function loadFeedPulses(offset = 0) {
+  const container = document.getElementById('feed-pulses');
+  if (!container) return;
+  if (offset === 0) container.innerHTML = '<div class="flex items-center justify-center h-24 text-zinc-500 text-sm">Loading…</div>';
+
+  const url = APP.currentTab === 'trending'
+    ? `/api/feed/trending?offset=${offset}`
+    : `/api/feed/following?offset=${offset}`;
+  const data = await api(url);
+  const pulses = data.pulses || [];
+
+  if (offset === 0) {
+    if (!pulses.length) {
+      container.innerHTML = APP.currentTab === 'following'
+        ? renderEmptyFollowing()
+        : '<div class="p-8 text-center text-zinc-500">No trending pulses yet. Be the first!</div>';
+      return;
+    }
+    container.innerHTML = '';
+  }
+
+  pulses.forEach(p => {
+    const div = document.createElement('div');
+    div.setAttribute('data-pulse-id', p.id);
+    div.innerHTML = renderPulseCard(p);
+    container.appendChild(div);
+  });
+
+  if (pulses.length === 20) {
+    const loadMoreDiv = document.createElement('div');
+    loadMoreDiv.id = 'load-more';
+    loadMoreDiv.innerHTML = `<button class="w-full py-4 text-violet-400 hover:text-violet-300 text-sm font-semibold transition-colors" onclick="loadMoreFeed(${offset + 20})">Load more</button>`;
+    container.appendChild(loadMoreDiv);
+  }
+}
+
+async function loadMoreFeed(offset) {
+  const lm = document.getElementById('load-more');
+  if (lm) lm.remove();
+  await loadFeedPulses(offset);
+}
+
+function renderEmptyFollowing() {
+  return `
+    <div class="p-8 text-center">
+      <p class="text-zinc-400 mb-4">You're not following anyone yet.</p>
+      <p class="text-zinc-500 text-sm">Find people to follow by browsing the Trending tab.</p>
+    </div>
+  `;
+}
+
+// ── Thread View ───────────────────────────────────────────────────────────────
+async function renderThreadView(pulseId) {
+  const main = document.getElementById('main-content');
+  main.innerHTML = `
+    <div class="max-w-xl mx-auto">
+      <div class="flex items-center gap-3 p-4 border-b border-zinc-800 sticky top-0 bg-zinc-950 z-10">
+        <button onclick="navigate('feed')" class="text-zinc-400 hover:text-zinc-100 transition-colors">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+        </button>
+        <h2 class="font-bold text-lg">Pulse</h2>
+      </div>
+      <div id="thread-root" class="text-zinc-500 text-sm p-4">Loading…</div>
+      <div id="thread-comments" class="divide-y divide-zinc-800"></div>
+      ${renderComposeBox('Reply to this pulse…', 'comment')}
+    </div>
+  `;
+
+  // Override compose submit to post as comment
+  window._currentThreadPulseId = pulseId;
+
+  const [pulseData, commentsData] = await Promise.all([
+    api(`/api/pulses/${pulseId}`),
+    api(`/api/pulses/${pulseId}/comments`),
+  ]);
+
+  const rootEl = document.getElementById('thread-root');
+  if (pulseData.error || !pulseData.pulse) {
+    rootEl.innerHTML = '<p class="text-red-400">Pulse not found.</p>';
+    return;
+  }
+  rootEl.innerHTML = renderPulseCard(pulseData.pulse, true);
+
+  const commentsEl = document.getElementById('thread-comments');
+  const comments = commentsData.comments || [];
+  if (!comments.length) {
+    commentsEl.innerHTML = '<p class="text-zinc-500 text-sm p-4">No replies yet. Be the first!</p>';
+  } else {
+    commentsEl.innerHTML = comments.map(c => `
+      <div class="p-4 hover:bg-zinc-900/40 transition-colors">
+        <div class="flex gap-3">
+          <div class="avatar" onclick="navigate('profile/${esc(c.username)}')">${esc(initials(c.username))}</div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <button class="font-semibold text-zinc-100 hover:underline text-sm" onclick="navigate('profile/${esc(c.username)}')">${esc(c.username)}</button>
+              ${c.signature ? `<span class="text-violet-400 flex items-center gap-1" title="Signed by ${esc(abbrevPubkey(c.usernode_pubkey))}">${ICON_CHAIN}</span>` : ''}
+              <span class="text-zinc-500 text-xs">${timeAgo(c.created_at)}</span>
+            </div>
+            <p class="mt-1 text-sm text-zinc-100 leading-relaxed whitespace-pre-wrap break-words">${esc(c.content)}</p>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // Wire compose submit for comments
+  const composeBtn = document.getElementById('compose-btn');
+  if (composeBtn) {
+    composeBtn.onclick = () => handleCompose('comment', pulseId);
+  }
+}
+
+// ── Profile ───────────────────────────────────────────────────────────────────
+async function renderProfile(username) {
+  const main = document.getElementById('main-content');
+  main.innerHTML = `
+    <div class="max-w-xl mx-auto">
+      <div class="flex items-center gap-3 p-4 border-b border-zinc-800 sticky top-0 bg-zinc-950 z-10">
+        <button onclick="history.back()" class="text-zinc-400 hover:text-zinc-100 transition-colors">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+        </button>
+        <h2 class="font-bold text-lg">${esc(username)}</h2>
+      </div>
+      <div id="profile-header" class="p-4 text-zinc-500 text-sm">Loading…</div>
+      <div id="profile-pulses" class="divide-y divide-zinc-800"></div>
+    </div>
+  `;
+
+  const [profileData, pulsesData] = await Promise.all([
+    api(`/api/users/${encodeURIComponent(username)}`),
+    api(`/api/users/${encodeURIComponent(username)}/pulses`),
+  ]);
+
+  const headerEl = document.getElementById('profile-header');
+  if (profileData.error) {
+    headerEl.innerHTML = '<p class="text-red-400">User not found.</p>';
+    return;
+  }
+
+  const isMe = username === APP.me.username;
+  const isFollowing = profileData.is_following;
+
+  headerEl.innerHTML = `
+    <div class="flex items-start gap-4">
+      <div class="avatar avatar-lg">${esc(initials(username))}</div>
+      <div class="flex-1">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <h3 class="font-bold text-xl text-zinc-100">${esc(username)}</h3>
+          ${!isMe ? `
+            <button id="follow-btn"
+              class="px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${isFollowing ? 'bg-zinc-700 hover:bg-red-900 text-zinc-100' : 'bg-violet-600 hover:bg-violet-500 text-white'}"
+              onclick="handleFollow('${esc(username)}', ${isFollowing})">
+              ${isFollowing ? 'Following' : 'Follow'}
+            </button>
+          ` : ''}
+        </div>
+        ${profileData.usernode_pubkey ? `
+          <div class="flex items-center gap-1 mt-1 text-violet-400 text-xs">
+            ${ICON_CHAIN}
+            <span>${esc(abbrevPubkey(profileData.usernode_pubkey))}</span>
+          </div>
+        ` : ''}
+        <div class="flex gap-5 mt-3 text-sm">
+          <span><strong class="text-zinc-100">${profileData.following_count}</strong> <span class="text-zinc-500">Following</span></span>
+          <span><strong class="text-zinc-100">${profileData.follower_count}</strong> <span class="text-zinc-500">Followers</span></span>
+          <span><strong class="text-zinc-100">${profileData.pulse_count}</strong> <span class="text-zinc-500">Pulses</span></span>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const pulsesEl = document.getElementById('profile-pulses');
+  const pulses = pulsesData.pulses || [];
+  if (!pulses.length) {
+    pulsesEl.innerHTML = '<p class="text-zinc-500 text-sm p-6 text-center">No pulses yet.</p>';
+  } else {
+    pulsesEl.innerHTML = pulses.map(p => `<div data-pulse-id="${p.id}">${renderPulseCard(p)}</div>`).join('');
+  }
+}
+
+async function handleFollow(username, currentlyFollowing) {
+  const btn = document.getElementById('follow-btn');
+  if (btn) btn.disabled = true;
+
+  try {
+    let res;
+    if (currentlyFollowing) {
+      res = await api(`/api/users/${encodeURIComponent(username)}/follow`, { method: 'DELETE' });
+    } else {
+      res = await api(`/api/users/${encodeURIComponent(username)}/follow`, { method: 'POST' });
+    }
+    if (res.error) throw new Error(res.error);
+    const newFollowing = !currentlyFollowing;
+    if (btn) {
+      btn.className = `px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${newFollowing ? 'bg-zinc-700 hover:bg-red-900 text-zinc-100' : 'bg-violet-600 hover:bg-violet-500 text-white'}`;
+      btn.textContent = newFollowing ? 'Following' : 'Follow';
+      btn.setAttribute('onclick', `handleFollow('${username}', ${newFollowing})`);
+      btn.disabled = false;
+    }
+    showToast(newFollowing ? `Following ${username}` : `Unfollowed ${username}`);
+  } catch (e) {
+    showToast(e.message || 'Failed.', true);
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ── Router ────────────────────────────────────────────────────────────────────
+function navigate(route) {
+  location.hash = route;
+}
+
+function handleRoute() {
+  const hash = (location.hash || '').replace(/^#\/?/, '');
+  if (!hash || hash === 'feed') {
+    renderFeed();
+  } else if (hash.startsWith('profile/')) {
+    const username = decodeURIComponent(hash.slice('profile/'.length));
+    renderProfile(username);
+  } else if (hash.startsWith('pulse/')) {
+    const pulseId = hash.slice('pulse/'.length);
+    renderThreadView(pulseId);
+  } else {
+    renderFeed();
+  }
+}
+
+window.addEventListener('hashchange', handleRoute);
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+async function boot() {
+  // Resolve who we are from the JWT token embedded in the page params.
+  // The server returns req.user from the JWT, so we call any authed endpoint
+  // to get our identity. We use /api/feed/trending (returns user context).
+  // Actually — we get identity from the JWT itself by calling a lightweight endpoint.
+  // Use /health isn't auth'd. Instead call /api/feed/trending which will give us data.
+  // For user identity we just parse the token client-side (non-sensitive fields).
+  if (TOKEN) {
+    try {
+      // Parse JWT payload (we trust the server issued it; just need id/username)
+      const parts = TOKEN.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+        APP.me.id = payload.id;
+        APP.me.username = payload.username;
+        APP.me.usernode_pubkey = payload.usernode_pubkey || null;
+      }
+    } catch (e) {
+      console.warn('Could not parse token:', e);
+    }
+  }
+
+  document.getElementById('sidebar-username').textContent = APP.me.username || '';
+  handleRoute();
+}
+
+boot();
+</script>
 </body>
 </html>
