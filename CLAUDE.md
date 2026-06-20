@@ -169,8 +169,8 @@ const APP = {
 | `loadFeedPulses(offset)` | Picks the right feed endpoint from `APP.currentTab`, appends pulse cards; adds "Load more" button when 20 results returned |
 | `switchTab(tab)` | Sets `APP.currentTab`, refreshes tab styling, calls `loadFeedPulses()` |
 | `renderPulseCard(p, large)` | Returns HTML for a post card; shows chain icon (`ICON_CHAIN`) when `p.signature` is truthy |
-| `anchorPost(content)` | Calls `usernode.sendTransaction(...)`, extracts tx ID, returns it or null (see below) |
-| `handleCompose(type)` | "Sign & Post" handler — calls `anchorPost()` for new posts, posts to API, resets button |
+| `anchorPost(content)` | **Dormant** — calls `usernode.sendTransaction(...)`, extracts tx ID, returns it or null. Currently not called from the posting flow (see On-chain anchoring). |
+| `handleCompose(type)` | "Post" handler — posts/comments straight to the API unsigned (`signature: null, sign_message: null`), resets button |
 | `handleLike(pulseId, currentlyLiked)` | Like/unlike toggle; updates icon and count in-place without re-rendering |
 | `handleDelete(pulseId)` | Soft-deletes own post; removes card from DOM or navigates to feed |
 | `renderThreadView(pulseId)` | Original post (large) + comments (ASC) + reply compose box; sets `window._threadPulseId` |
@@ -192,10 +192,20 @@ const APP = {
 
 ## On-chain anchoring
 
-New posts (not likes, not comments) are anchored via a wallet self-transaction.
-The mechanism lives in `anchorPost(content)` in `public/index.html`.
+> **Status: DISABLED in the posting flow (testnet).** Posts are currently
+> stored **unsigned** — `handleCompose` sends `signature: null,
+> sign_message: null`, exactly like comments and likes, with no wallet/bridge
+> interaction and a plain **"Post"** button (no "Sign & Post"). The pieces
+> below (`anchorPost`, the `signature` / `sign_message` columns, and the
+> chain-icon rendering) are kept in place but **dormant** so signing can be
+> re-enabled later by simply calling `anchorPost()` again from the post branch
+> of `handleCompose`. The description below documents the dormant mechanism.
 
-**Flow:**
+When enabled, new posts (not likes, not comments) are anchored via a wallet
+self-transaction. The mechanism lives in `anchorPost(content)` in
+`public/index.html`.
+
+**Flow (when re-enabled):**
 
 1. Check `typeof usernode !== 'undefined' && typeof usernode.sendTransaction === 'function'`.
    If false, show toast "Usernode bridge not available" and return null.
@@ -308,8 +318,10 @@ entry to `dapp.json` in the same commit.
   `user_id` from `pulses WHERE username = $1 LIMIT 1`. A user who has never
   posted gets `following_id = 0`. This is a known edge case.
 - **`signature` / `sign_message` columns on all three write tables.** These
-  were reserved for future signing. Currently null on likes and comments; only
-  populated on posts (via `sendTransaction`). Don't remove them.
+  were reserved for signing. **Currently null on all rows** (posts, likes, and
+  comments) because on-chain anchoring is disabled in the posting flow on
+  testnet. They remain so signing can be switched back on without a migration.
+  Don't remove them.
 - **Self-transaction amount is 1.** The post sends 1 token from the user to
   their own address. The user pays only the network fee. This hasn't been
   verified against Usernode's node for edge cases (e.g. minimum balance

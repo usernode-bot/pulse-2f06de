@@ -264,7 +264,11 @@ const ICON_COMMENT = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none
 const ICON_CHAIN = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>`;
 const ICON_BACK = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>`;
 
-// ── On-chain post anchoring ───────────────────────────────────────────────────
+// ── On-chain post anchoring (DORMANT) ─────────────────────────────────────────
+// Currently unused: on-chain anchoring is disabled in the posting flow on
+// testnet, so handleCompose stores posts unsigned. This helper, the
+// signature/sign_message columns, and the chain-icon rendering are kept in
+// place so signing can be re-enabled later by calling anchorPost() again.
 async function anchorPost(content) {
   if (typeof usernode === 'undefined' || typeof usernode.sendTransaction !== 'function') {
     showToast('Usernode bridge not available', true);
@@ -305,7 +309,7 @@ function renderComposeBox(placeholder, actionType) {
               class="px-5 py-2 rounded-full bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition-colors"
               ${!hasPubkey ? `disabled title="${esc(tip)}"` : ''}
               onclick="handleCompose('${esc(actionType || 'post')}')"
-            >Sign &amp; Post</button>
+            >Post</button>
           </div>
           ${!hasPubkey ? `<p class="mt-2 text-xs text-zinc-500">${esc(tip)}</p>` : ''}
         </div>
@@ -332,7 +336,7 @@ async function handleCompose(type) {
   const pulseId = window._threadPulseId;
 
   btn.disabled = true;
-  btn.textContent = 'Signing…';
+  btn.textContent = 'Posting…';
 
   try {
     let body, res;
@@ -343,9 +347,11 @@ async function handleCompose(type) {
       if (res.error) throw new Error(res.error);
       showToast('Reply posted!');
     } else {
-      const txId = await anchorPost(content);
-      if (!txId) { btn.disabled = false; btn.textContent = 'Sign & Post'; return; }
-      body = { content, signature: txId, sign_message: content, pubkey: APP.me.usernode_pubkey };
+      // On-chain anchoring is disabled in the posting flow (testnet) — posts
+      // are stored unsigned, like comments and likes. The anchorPost helper,
+      // signature/sign_message columns, and chain-icon rendering remain in
+      // place but dormant so signing can be re-enabled later.
+      body = { content, signature: null, sign_message: null, pubkey: APP.me.usernode_pubkey };
       res = await api('/api/pulses', { method: 'POST', body });
       if (res.error) throw new Error(res.error);
       showToast('Pulse posted!');
@@ -363,7 +369,7 @@ async function handleCompose(type) {
   } catch (e) {
     showToast(e.message || 'Failed to post.', true);
     btn.disabled = false;
-    btn.textContent = 'Sign & Post';
+    btn.textContent = 'Post';
   }
 }
 
