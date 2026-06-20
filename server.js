@@ -433,6 +433,8 @@ app.get('*', (req, res) => {
 // ── Schema + Seed ─────────────────────────────────────────────────────────────
 
 async function start() {
+  app.listen(port, () => console.log(`Listening on :${port}`));
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pulses (
       id SERIAL PRIMARY KEY,
@@ -543,13 +545,13 @@ async function start() {
 
     // Comments
     await pool.query(`
-      INSERT INTO pulse_comments (pulse_id, user_id, username, usernode_pubkey, content) VALUES
-        (900001, 99990002, 'staging-pulse-bob', 'ut1staging000bob', 'Totally agree! The growth has been incredible.'),
-        (900003, 99990001, 'staging-pulse-alice', 'ut1staging000alice', 'Same here! Pulse is going to change everything.'),
-        (900005, 99990004, 'staging-pulse-dave', 'ut1staging000dave', 'Wise words. Backed up my seed phrase again after reading this.'),
-        (900007, 99990003, 'staging-pulse-carol', 'ut1staging000carol', 'Following this thread closely!'),
-        (900009, 99990004, 'staging-pulse-dave', 'ut1staging000dave', 'I''ll be there! Who else?')
-      ON CONFLICT DO NOTHING
+      INSERT INTO pulse_comments (id, pulse_id, user_id, username, usernode_pubkey, content) VALUES
+        (9000001, 900001, 99990002, 'staging-pulse-bob', 'ut1staging000bob', 'Totally agree! The growth has been incredible.'),
+        (9000002, 900003, 99990001, 'staging-pulse-alice', 'ut1staging000alice', 'Same here! Pulse is going to change everything.'),
+        (9000003, 900005, 99990004, 'staging-pulse-dave', 'ut1staging000dave', 'Wise words. Backed up my seed phrase again after reading this.'),
+        (9000004, 900007, 99990003, 'staging-pulse-carol', 'ut1staging000carol', 'Following this thread closely!'),
+        (9000005, 900009, 99990004, 'staging-pulse-dave', 'ut1staging000dave', 'I''ll be there! Who else?')
+      ON CONFLICT (id) DO NOTHING
     `);
 
     // Follows
@@ -565,8 +567,6 @@ async function start() {
       ON CONFLICT (follower_id, following_id) DO NOTHING
     `);
   }
-
-  app.listen(port, () => console.log(`Listening on :${port}`));
 }
 
 start().catch(err => { console.error(err); process.exit(1); });
