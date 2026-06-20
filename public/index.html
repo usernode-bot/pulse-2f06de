@@ -97,7 +97,7 @@
 
 <!-- ── Mobile top bar ─────────────────────────────────────────────────────── -->
 <header class="lg:hidden fixed top-0 left-0 right-0 z-30 h-14 bg-zinc-950/95 backdrop-blur-sm border-b border-zinc-800 flex items-center justify-center">
-  <span class="text-violet-400 font-black text-xl">⚡</span>
+  <svg class="text-violet-400" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="Pulse"><path d="M2 12h5l2-6 3 12 3-9 2 3h5"/></svg>
   <span class="ml-1 font-black text-xl text-white">Pulse</span>
 </header>
 
@@ -109,8 +109,8 @@
     <aside class="hidden lg:flex flex-col w-60 xl:w-64 shrink-0">
       <div class="sticky top-0 h-screen flex flex-col py-4 px-2 border-r border-zinc-800 overflow-y-auto">
         <!-- Logo -->
-        <div class="px-3 mb-4">
-          <span class="text-violet-400 font-black text-2xl">⚡</span>
+        <div class="px-3 mb-4 flex items-center">
+          <svg class="text-violet-400" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="Pulse"><path d="M2 12h5l2-6 3 12 3-9 2 3h5"/></svg>
           <span class="ml-1 font-black text-xl text-white">Pulse</span>
         </div>
         <!-- Nav links -->
@@ -158,8 +158,8 @@
         </div>
         <!-- Footer note -->
         <p class="text-xs text-zinc-600 px-1 leading-relaxed">
-          <span class="text-violet-500 font-semibold">⚡ Pulse</span> — heartbeat of Usernode.<br>
-          Every post signed on-chain with your wallet.
+          <span class="text-violet-500 font-semibold inline-flex items-center gap-1 align-middle"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline"><path d="M2 12h5l2-6 3 12 3-9 2 3h5"/></svg>Pulse</span> — heartbeat of Usernode.<br>
+          The community feed for Usernode.
         </p>
       </div>
     </aside>
@@ -192,6 +192,7 @@ const HEADERS = { 'Content-Type': 'application/json', ...(TOKEN ? { 'x-usernode-
 const APP = {
   me: { id: null, username: '', usernode_pubkey: null },
   currentTab: 'trending',
+  searchQuery: '',
 };
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
@@ -263,6 +264,7 @@ const ICON_HEART_FILLED = `<svg width="18" height="18" viewBox="0 0 24 24" fill=
 const ICON_COMMENT = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>`;
 const ICON_CHAIN = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>`;
 const ICON_BACK = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>`;
+const ICON_SEARCH = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-zinc-500 shrink-0"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`;
 
 // ── On-chain post anchoring (DORMANT) ─────────────────────────────────────────
 // Currently unused: on-chain anchoring is disabled in the posting flow on
@@ -299,7 +301,7 @@ function renderComposeBox(placeholder, actionType) {
         <div class="flex-1 min-w-0">
           <textarea id="compose-text" rows="3" maxlength="280"
             class="w-full bg-transparent text-zinc-100 placeholder-zinc-500 text-base border-b border-zinc-700 pb-2 mb-3"
-            placeholder="${esc(placeholder || "What's your pulse?")}"
+            placeholder="${esc(placeholder || "What's beating right now?")}"
             ${!hasPubkey ? 'disabled' : ''}
             oninput="updateComposeCounter(this)"
           ></textarea>
@@ -363,7 +365,7 @@ async function handleCompose(type) {
     if (type === 'comment' && pulseId) {
       renderThreadView(pulseId);
     } else {
-      APP.currentTab = 'following';
+      APP.currentTab = 'live';
       renderFeed();
     }
   } catch (e) {
@@ -379,29 +381,31 @@ function renderPulseCard(p, large) {
   const hasSig = !!p.signature;
   const avatarCls = large ? 'avatar avatar-lg' : 'avatar';
   const textCls = large ? 'text-base leading-relaxed' : 'text-sm leading-relaxed';
+  const cardTap = large ? '' : `onclick="navigate('pulse/${p.id}')"`;
+  const cardCursor = large ? '' : ' cursor-pointer';
   return `
-    <div class="pulse-card p-4 hover:bg-white/[0.02] transition-colors">
+    <div class="pulse-card p-4 hover:bg-white/[0.02] transition-colors${cardCursor}" ${cardTap}>
       <div class="flex gap-3">
-        <div class="${avatarCls}" onclick="navigate('profile/${esc(p.username)}')">${esc(initials(p.username))}</div>
+        <div class="${avatarCls}" onclick="event.stopPropagation(); navigate('profile/${esc(p.username)}')">${esc(initials(p.username))}</div>
         <div class="flex-1 min-w-0">
           <div class="flex items-baseline gap-2 flex-wrap mb-1">
-            <button class="font-semibold text-zinc-100 hover:underline text-sm" onclick="navigate('profile/${esc(p.username)}')">${esc(p.username)}</button>
+            <button class="font-semibold text-zinc-100 hover:underline text-sm" onclick="event.stopPropagation(); navigate('profile/${esc(p.username)}')">${esc(p.username)}</button>
             ${hasSig ? `<span class="text-violet-400 inline-flex items-center gap-0.5 text-xs" title="Signed · ${esc(abbrevPubkey(p.usernode_pubkey))}">${ICON_CHAIN} <span class="hidden sm:inline">${esc(abbrevPubkey(p.usernode_pubkey))}</span></span>` : ''}
             <span class="text-zinc-500 text-xs">${timeAgo(p.created_at)}</span>
           </div>
           <p class="${textCls} text-zinc-100 whitespace-pre-wrap break-words">${esc(p.content)}</p>
           <div class="flex items-center gap-6 mt-3">
             <button class="flex items-center gap-1.5 text-zinc-500 hover:text-violet-400 transition-colors text-sm group"
-              onclick="handleLike(${p.id}, ${!!liked})" id="like-btn-${p.id}">
+              onclick="event.stopPropagation(); handleLike(${p.id}, ${!!liked})" id="like-btn-${p.id}">
               <span id="like-icon-${p.id}">${liked ? ICON_HEART_FILLED : ICON_HEART_EMPTY}</span>
               <span id="like-count-${p.id}" class="${liked ? 'text-violet-400' : ''}">${p.like_count || 0}</span>
             </button>
             <button class="flex items-center gap-1.5 text-zinc-500 hover:text-sky-400 transition-colors text-sm"
-              onclick="navigate('pulse/${p.id}')">
+              onclick="event.stopPropagation(); navigate('pulse/${p.id}')">
               ${ICON_COMMENT}
               <span>${p.comment_count || 0}</span>
             </button>
-            ${p.user_id === APP.me.id ? `<button class="ml-auto text-xs text-zinc-600 hover:text-red-400 transition-colors" onclick="handleDelete(${p.id})">Delete</button>` : ''}
+            ${p.user_id === APP.me.id ? `<button class="ml-auto text-xs text-zinc-600 hover:text-red-400 transition-colors" onclick="event.stopPropagation(); handleDelete(${p.id})">Delete</button>` : ''}
           </div>
         </div>
       </div>
@@ -433,7 +437,7 @@ async function handleLike(pulseId, currentlyLiked) {
     const countEl = document.getElementById('like-count-' + pulseId);
     if (iconEl) iconEl.innerHTML = newLiked ? ICON_HEART_FILLED : ICON_HEART_EMPTY;
     if (countEl) { countEl.textContent = res.like_count; countEl.className = newLiked ? 'text-violet-400' : ''; }
-    if (btn) { btn.setAttribute('onclick', `handleLike(${pulseId}, ${newLiked})`); btn.disabled = false; }
+    if (btn) { btn.setAttribute('onclick', `event.stopPropagation(); handleLike(${pulseId}, ${newLiked})`); btn.disabled = false; }
   } catch (e) {
     showToast(e.message || 'Failed.', true);
     if (btn) btn.disabled = false;
@@ -679,19 +683,90 @@ async function handleFollow(username, currentlyFollowing) {
   }
 }
 
-// ── Search placeholder ────────────────────────────────────────────────────────
+// ── Search ────────────────────────────────────────────────────────────────────
+let _searchSeq = 0;       // out-of-order response guard
+let _searchTimer = null;  // debounce handle
+
 function renderSearch() {
   const main = document.getElementById('main-content');
   main.innerHTML = `
-    <div class="flex items-center gap-3 px-4 py-3 border-b border-zinc-800 sticky top-14 lg:top-0 bg-zinc-950 z-10">
-      <h2 class="font-bold text-lg">Search</h2>
+    <div class="px-4 py-3 border-b border-zinc-800 sticky top-14 lg:top-0 bg-zinc-950 z-10">
+      <div class="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-full px-4 py-2">
+        ${ICON_SEARCH}
+        <input id="search-input" type="text" autocomplete="off"
+          class="flex-1 bg-transparent text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none"
+          placeholder="Search pulses and people"
+          oninput="onSearchInput(this.value)" value="${esc(APP.searchQuery || '')}">
+      </div>
     </div>
-    <div class="p-8 text-center">
-      <div class="text-5xl mb-4">🔍</div>
-      <h3 class="font-bold text-lg mb-2">Search is coming soon</h3>
-      <p class="text-zinc-500 text-sm">Find pulses, people, and topics.</p>
-    </div>
+    <div id="search-results"></div>
   `;
+  const input = document.getElementById('search-input');
+  if (input) input.focus();
+  if (APP.searchQuery && APP.searchQuery.trim()) {
+    doSearch(APP.searchQuery.trim());
+  } else {
+    renderSearchPrompt();
+  }
+}
+
+function renderSearchPrompt() {
+  const el = document.getElementById('search-results');
+  if (el) el.innerHTML = '<div class="p-8 text-center text-zinc-500 text-sm">Search pulses and people across Pulse.</div>';
+}
+
+function onSearchInput(value) {
+  APP.searchQuery = value;
+  clearTimeout(_searchTimer);
+  const q = value.trim();
+  if (!q) { renderSearchPrompt(); return; }
+  _searchTimer = setTimeout(() => doSearch(q), 250);
+}
+
+async function doSearch(q) {
+  const seq = ++_searchSeq;
+  const el = document.getElementById('search-results');
+  if (!el) return;
+  let data;
+  try {
+    data = await api('/api/search?q=' + encodeURIComponent(q));
+  } catch (e) {
+    if (seq === _searchSeq) el.innerHTML = '<div class="p-8 text-center text-zinc-500 text-sm">Search failed. Try again.</div>';
+    return;
+  }
+  // Ignore stale responses: a newer query has been issued since.
+  if (seq !== _searchSeq) return;
+
+  const users = data.users || [];
+  const pulses = data.pulses || [];
+
+  if (!users.length && !pulses.length) {
+    el.innerHTML = `<div class="p-8 text-center text-zinc-500 text-sm">No results for "${esc(q)}".</div>`;
+    return;
+  }
+
+  let html = '';
+
+  if (users.length) {
+    html += '<h3 class="font-bold text-sm text-zinc-400 px-4 pt-4 pb-2 uppercase tracking-wide">Users</h3>';
+    html += users.map(u => `
+      <div class="flex items-center gap-3 px-4 py-3 border-b border-zinc-800 hover:bg-white/[0.02] transition-colors cursor-pointer"
+        onclick="navigate('profile/${esc(u.username)}')">
+        <div class="avatar-sm">${esc(initials(u.username))}</div>
+        <div class="flex-1 min-w-0">
+          <p class="font-semibold text-sm text-zinc-100 truncate">${esc(u.username)}</p>
+          ${u.usernode_pubkey ? `<span class="text-violet-400 text-xs inline-flex items-center gap-0.5">${ICON_CHAIN} ${esc(abbrevPubkey(u.usernode_pubkey))}</span>` : ''}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  if (pulses.length) {
+    html += '<h3 class="font-bold text-sm text-zinc-400 px-4 pt-4 pb-2 uppercase tracking-wide">Pulses</h3>';
+    html += pulses.map(p => `<div data-pulse-id="${p.id}">${renderPulseCard(p)}</div>`).join('');
+  }
+
+  el.innerHTML = html;
 }
 
 // ── Right sidebar: Who to follow ──────────────────────────────────────────────

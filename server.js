@@ -372,6 +372,46 @@ app.get('/api/suggestions', async (req, res) => {
   }
 });
 
+// ── Search ────────────────────────────────────────────────────────────────────
+
+app.get('/api/search', async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+    if (!q) return res.json({ users: [], pulses: [] });
+    const term = '%' + q + '%';
+    const userId = req.user ? req.user.id : null;
+
+    const [usersRes, pulsesRes] = await Promise.all([
+      pool.query(`
+        SELECT username, MAX(usernode_pubkey) AS usernode_pubkey
+        FROM pulses
+        WHERE deleted_at IS NULL AND username ILIKE $1
+        GROUP BY username
+        ORDER BY username
+        LIMIT 10
+      `, [term]),
+      pool.query(`
+        SELECT p.id, p.user_id, p.username, p.usernode_pubkey, p.content,
+               p.signature, p.sign_message, p.created_at,
+               COUNT(DISTINCT l.id)::int AS like_count,
+               COUNT(DISTINCT c.id)::int AS comment_count,
+               BOOL_OR(l.user_id = $1) AS liked_by_me
+        FROM pulses p
+        LEFT JOIN pulse_likes l ON l.pulse_id = p.id
+        LEFT JOIN pulse_comments c ON c.pulse_id = p.id
+        WHERE p.deleted_at IS NULL AND p.content ILIKE $2
+        GROUP BY p.id
+        ORDER BY p.created_at DESC
+        LIMIT 20
+      `, [userId, term]),
+    ]);
+
+    res.json({ users: usersRes.rows, pulses: pulsesRes.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Static & Shell ────────────────────────────────────────────────────────────
 
 app.use(express.static(path.join(__dirname, 'public')));
