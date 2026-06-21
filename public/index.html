@@ -295,10 +295,12 @@ async function anchorPost(content) {
   try {
     const result = await sendTransaction(
       APP.me.usernode_pubkey, 1, content,
-      { confirmTitle: 'Publish to Pulse', confirmSubtitle: content.slice(0, 80) }
+      { confirmTitle: 'Publish to Pulse', confirmSubtitle: content.slice(0, 80), waitForInclusion: false }
     );
     const r = result;
-    return r?.tx_id || r?.txid || r?.txId || r?.hash || r?.tx_hash || r?.txHash || r?.id
+    console.log('sendTransaction raw response:', JSON.stringify(r));
+    return r?.result?.txId || r?.result?.tx?.id
+        || r?.tx_id || r?.txid || r?.txId || r?.hash || r?.tx_hash || r?.txHash || r?.id
         || r?.tx?.tx_id || r?.tx?.txid || r?.tx?.txId || r?.tx?.hash || r?.tx?.tx_hash || r?.tx?.txHash || r?.tx?.id
         || null;
   } catch (e) {
