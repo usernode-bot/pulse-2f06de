@@ -9,7 +9,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const JWT_SECRET = process.env.JWT_SECRET;
 const IS_STAGING = process.env.USERNODE_ENV === 'staging';
 
-const PUBLIC_API_PATHS = new Set(['/health', '/favicon.ico']);
+const PUBLIC_API_PATHS = new Set(['/health']);
 const PUBLIC_PREFIXES = ['/explorer-api/'];
 
 app.use(express.json());
@@ -413,6 +413,8 @@ app.get('/api/search', async (req, res) => {
 });
 
 // ── Static & Shell ────────────────────────────────────────────────────────────
+
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 app.use(express.static(path.join(__dirname, 'public')));
 
