@@ -41,6 +41,11 @@
       "path": "/",
       "name": "Trending Topics panel present",
       "expectSelector": "#trending-topics"
+    },
+    {
+      "path": "/#explore",
+      "name": "Explore page renders",
+      "expectSelector": "#explore-suggestions-list"
     }
   ],
   "visibility": {
