@@ -288,12 +288,12 @@ const ICON_SEARCH = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"
 
 // ── On-chain post anchoring ────────────────────────────────────────────────────
 async function anchorPost(content) {
-  if (typeof usernode === 'undefined' || typeof usernode.sendTransaction !== 'function') {
+  if (typeof sendTransaction !== 'function') {
     showToast('Usernode bridge not available', true);
     return null;
   }
   try {
-    const result = await usernode.sendTransaction(
+    const result = await sendTransaction(
       APP.me.usernode_pubkey, 1, content,
       { confirmTitle: 'Publish to Pulse', confirmSubtitle: content.slice(0, 80) }
     );
