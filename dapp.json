@@ -1,6 +1,10 @@
 {
   "name": "Pulse",
   "secrets": [],
+  "llm": {
+    "purpose": "Generate creative short pulse post suggestions for users",
+    "suggested_daily_cap_cents": 50
+  },
   "tests": [
     {
       "path": "/",
@@ -46,6 +50,11 @@
       "path": "/#explore",
       "name": "Explore page renders",
       "expectSelector": "#explore-suggestions-list"
+    },
+    {
+      "path": "/",
+      "name": "AI suggest button present",
+      "expectSelector": "#compose-suggest-btn"
     }
   ],
   "visibility": {

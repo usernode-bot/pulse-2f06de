@@ -8,8 +8,9 @@ const port = process.env.PORT || 3000;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const JWT_SECRET = process.env.JWT_SECRET;
 const IS_STAGING = process.env.USERNODE_ENV === 'staging';
+const LLM_ENABLED = !!process.env.USERNODE_LLM_PROXY_TOKEN;
 
-const PUBLIC_API_PATHS = new Set(['/health', '/api/hashtags/trending']);
+const PUBLIC_API_PATHS = new Set(['/health', '/api/hashtags/trending', '/api/features']);
 const PUBLIC_PREFIXES = ['/explorer-api/'];
 
 app.use(express.json());
@@ -469,6 +470,56 @@ app.get('/api/hashtags/:tag/pulses', async (req, res) => {
       LIMIT 20 OFFSET $3
     `, [userId, req.params.tag, offset]);
     res.json({ pulses: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Features & LLM ───────────────────────────────────────────────────────────
+
+app.get('/api/features', (_req, res) => {
+  res.json({ llmEnabled: LLM_ENABLED });
+});
+
+app.post('/api/llm/suggest', async (req, res) => {
+  if (!LLM_ENABLED) {
+    return res.json({ llmEnabled: false });
+  }
+  try {
+    const resp = await fetch(`${process.env.USERNODE_LLM_PROXY_URL}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'x-usernode-app-token': process.env.USERNODE_LLM_PROXY_TOKEN,
+        'x-usernode-user-token': req.headers['x-usernode-token'],
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 120,
+        messages: [{
+          role: 'user',
+          content: 'Write a single creative, punchy microblog post (max 280 characters) for a web3 community. Return ONLY the post text, no quotes, no explanation.',
+        }],
+      }),
+    });
+
+    if (resp.status === 403) {
+      const body = await resp.json().catch(() => ({}));
+      if (body.code === 'grant_required') return res.status(403).json({ error: 'grant_required' });
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    if (resp.status === 429) {
+      const body = await resp.json().catch(() => ({}));
+      return res.status(429).json({ error: body.code === 'app_cap_exceeded' ? 'app_cap_exceeded' : 'budget_exceeded' });
+    }
+    if (!resp.ok) {
+      return res.status(502).json({ error: 'llm_error' });
+    }
+
+    const data = await resp.json();
+    const suggestion = data?.content?.[0]?.text?.trim() || '';
+    res.json({ suggestion });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

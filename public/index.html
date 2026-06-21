@@ -199,6 +199,7 @@ const APP = {
   me: { id: null, username: '', usernode_pubkey: null },
   currentTab: 'trending',
   searchQuery: '',
+  features: { llmEnabled: false },
 };
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
@@ -285,11 +286,7 @@ const ICON_CHAIN = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" 
 const ICON_BACK = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>`;
 const ICON_SEARCH = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-zinc-500 shrink-0"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`;
 
-// ── On-chain post anchoring (DORMANT) ─────────────────────────────────────────
-// Currently unused: on-chain anchoring is disabled in the posting flow on
-// testnet, so handleCompose stores posts unsigned. This helper, the
-// signature/sign_message columns, and the chain-icon rendering are kept in
-// place so signing can be re-enabled later by calling anchorPost() again.
+// ── On-chain post anchoring ────────────────────────────────────────────────────
 async function anchorPost(content) {
   if (typeof usernode === 'undefined' || typeof usernode.sendTransaction !== 'function') {
     showToast('Usernode bridge not available', true);
@@ -305,6 +302,9 @@ async function anchorPost(content) {
         || r?.tx?.tx_id || r?.tx?.txid || r?.tx?.txId || r?.tx?.hash || r?.tx?.tx_hash || r?.tx?.txHash || r?.tx?.id
         || null;
   } catch (e) {
+    if (!e?.message?.toLowerCase().includes('cancel')) {
+      showToast('Could not anchor post — please try again.', true);
+    }
     return null;
   }
 }
@@ -325,12 +325,19 @@ function renderComposeBox(placeholder, actionType) {
             oninput="updateComposeCounter(this)"
           ></textarea>
           <div class="flex items-center justify-between">
-            <span id="compose-counter" class="text-xs text-zinc-500">0 / 280</span>
+            <div class="flex items-center gap-2">
+              <span id="compose-counter" class="text-xs text-zinc-500">0 / 280</span>
+              <button id="compose-suggest-btn"
+                class="text-xs text-violet-400 hover:text-violet-300 transition-colors flex items-center gap-1"
+                onclick="handleSuggest()"
+                title="AI pulse suggestion"
+              >✨ Suggest</button>
+            </div>
             <button id="compose-btn"
               class="px-5 py-2 rounded-full bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition-colors"
               ${!hasPubkey ? `disabled title="${esc(tip)}"` : ''}
               onclick="handleCompose('${esc(actionType || 'post')}')"
-            >Post</button>
+            >${actionType === 'comment' ? 'Post' : 'Sign &amp; Post'}</button>
           </div>
           ${!hasPubkey ? `<p class="mt-2 text-xs text-zinc-500">${esc(tip)}</p>` : ''}
         </div>
@@ -355,6 +362,8 @@ async function handleCompose(type) {
   if (!content) { showToast('Write something first.', true); return; }
   if (content.length > 280) { showToast('Too long — max 280 chars.', true); return; }
   const pulseId = window._threadPulseId;
+  const isComment = type === 'comment' && pulseId;
+  const originalLabel = btn.textContent;
 
   btn.disabled = true;
   btn.textContent = 'Posting…';
@@ -362,26 +371,31 @@ async function handleCompose(type) {
   try {
     let body, res;
 
-    if (type === 'comment' && pulseId) {
+    if (isComment) {
       body = { content, signature: null, sign_message: null, pubkey: APP.me.usernode_pubkey };
       res = await api(`/api/pulses/${pulseId}/comments`, { method: 'POST', body });
       if (res.error) throw new Error(res.error);
       showToast('Reply posted!');
     } else {
-      // On-chain anchoring is disabled in the posting flow (testnet) — posts
-      // are stored unsigned, like comments and likes. The anchorPost helper,
-      // signature/sign_message columns, and chain-icon rendering remain in
-      // place but dormant so signing can be re-enabled later.
-      body = { content, signature: null, sign_message: null, pubkey: APP.me.usernode_pubkey };
+      btn.textContent = 'Signing…';
+      const txId = await anchorPost(content);
+      if (txId === null) {
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+        return;
+      }
+      btn.textContent = 'Posting…';
+      body = { content, signature: txId, sign_message: content, pubkey: APP.me.usernode_pubkey };
       res = await api('/api/pulses', { method: 'POST', body });
       if (res.error) throw new Error(res.error);
+      try { usernode.acknowledgeTransaction(txId); } catch (_) {}
       showToast('Pulse posted!');
     }
 
     ta.value = '';
     updateComposeCounter(ta);
 
-    if (type === 'comment' && pulseId) {
+    if (isComment) {
       renderThreadView(pulseId);
     } else {
       APP.currentTab = 'live';
@@ -390,8 +404,84 @@ async function handleCompose(type) {
   } catch (e) {
     showToast(e.message || 'Failed to post.', true);
     btn.disabled = false;
-    btn.textContent = 'Post';
+    btn.textContent = originalLabel;
   }
+}
+
+// ── AI Suggest ────────────────────────────────────────────────────────────────
+async function handleSuggest() {
+  if (!APP.features.llmEnabled) {
+    showToast('AI suggestions not available in this environment.', true);
+    return;
+  }
+
+  const btn = document.getElementById('compose-suggest-btn');
+  const ta = document.getElementById('compose-text');
+  if (!btn || !ta) return;
+
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '…';
+
+  try {
+    let grantState;
+    try {
+      grantState = await usernode.getLlmAccess();
+    } catch (_) {
+      showToast('AI suggestions not available in this environment.', true);
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+      return;
+    }
+
+    if (!grantState?.granted) {
+      let reqResult;
+      try {
+        reqResult = await usernode.requestLlmAccess();
+      } catch (_) {
+        showToast('AI suggestions not available in this environment.', true);
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+        return;
+      }
+      if (!reqResult?.granted) {
+        showToast('AI suggestions need your permission.', true);
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+        return;
+      }
+    }
+
+    const res = await api('/api/llm/suggest', { method: 'POST' });
+
+    if (res.error === 'grant_required') {
+      let reqResult;
+      try { reqResult = await usernode.requestLlmAccess(); } catch (_) {}
+      if (!reqResult?.granted) {
+        showToast('AI suggestions need your permission.', true);
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+        return;
+      }
+      const retry = await api('/api/llm/suggest', { method: 'POST' });
+      if (retry.suggestion) {
+        ta.value = retry.suggestion;
+        updateComposeCounter(ta);
+      }
+    } else if (res.error === 'app_cap_exceeded' || res.error === 'budget_exceeded') {
+      showToast('Daily AI limit reached — resets tomorrow.', true);
+    } else if (res.suggestion) {
+      ta.value = res.suggestion;
+      updateComposeCounter(ta);
+    } else {
+      showToast('Could not generate a suggestion — try again.', true);
+    }
+  } catch (e) {
+    showToast('Could not generate a suggestion — try again.', true);
+  }
+
+  btn.disabled = false;
+  btn.textContent = originalLabel;
 }
 
 // ── Pulse card ────────────────────────────────────────────────────────────────
@@ -1020,6 +1110,9 @@ async function boot() {
   if (usernameEl) usernameEl.textContent = APP.me.username;
   if (pubkeyEl) pubkeyEl.textContent = APP.me.usernode_pubkey ? abbrevPubkey(APP.me.usernode_pubkey) : '';
   if (avatarEl) avatarEl.textContent = initials(APP.me.username);
+
+  // Load features flag (non-blocking, best-effort)
+  api('/api/features').then(f => { if (f?.llmEnabled !== undefined) APP.features.llmEnabled = f.llmEnabled; }).catch(() => {});
 
   // Load right sidebar suggestions and trending topics (non-blocking)
   loadSuggestions();
