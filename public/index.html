@@ -179,6 +179,10 @@
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
     <span class="text-xs font-medium">Search</span>
   </button>
+  <button class="mob-nav-btn" id="mob-nav-explore" onclick="navigate('explore')">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+    <span class="text-xs font-medium">Explore</span>
+  </button>
   <button class="mob-nav-btn" id="mob-nav-profile" onclick="navigateToProfile()">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
     <span class="text-xs font-medium">Profile</span>
@@ -258,6 +262,7 @@ function updateNavActive(route) {
   const isHome = !route || route === 'feed' || route === '';
   const isProfile = route && route.startsWith('profile/') && decodeURIComponent(route.slice('profile/'.length)) === APP.me.username;
   const isSearch = route === 'search';
+  const isExplore = route === 'explore';
   if (isHome) {
     document.getElementById('nav-home')?.classList.add('active');
     document.getElementById('mob-nav-home')?.classList.add('active');
@@ -267,6 +272,8 @@ function updateNavActive(route) {
   } else if (isSearch) {
     document.getElementById('nav-search')?.classList.add('active');
     document.getElementById('mob-nav-search')?.classList.add('active');
+  } else if (isExplore) {
+    document.getElementById('mob-nav-explore')?.classList.add('active');
   }
 }
 
@@ -895,6 +902,76 @@ async function loadTrendingTopics() {
   } catch (e) {}
 }
 
+// ── Explore page (mobile) ─────────────────────────────────────────────────────
+function renderExplore() {
+  const main = document.getElementById('main-content');
+  main.innerHTML = `
+    <div class="px-4 py-3 border-b border-zinc-800 sticky top-14 lg:top-0 bg-zinc-950 z-10">
+      <h2 class="font-bold text-xl">Explore</h2>
+    </div>
+    <div class="p-4 flex flex-col gap-4">
+      <div class="rounded-2xl bg-zinc-900 border border-zinc-800 overflow-hidden">
+        <h3 class="font-bold text-lg px-4 pt-4 pb-2 border-b border-zinc-800">Who to follow</h3>
+        <div id="explore-suggestions-list">
+          <div class="px-4 py-3 text-zinc-500 text-sm">Loading…</div>
+        </div>
+      </div>
+      <div id="explore-trending-topics"></div>
+    </div>
+  `;
+  loadExploreSuggestions();
+  loadExploreTrendingTopics();
+}
+
+async function loadExploreSuggestions() {
+  const el = document.getElementById('explore-suggestions-list');
+  if (!el) return;
+  try {
+    const data = await api('/api/suggestions');
+    const suggestions = data.suggestions || [];
+    if (!suggestions.length) {
+      el.innerHTML = '<p class="px-4 py-3 text-zinc-500 text-sm">No suggestions right now.</p>';
+      return;
+    }
+    el.innerHTML = suggestions.map(u => `
+      <div class="flex items-center gap-3 px-4 py-3 hover:bg-zinc-800/60 transition-colors">
+        <div class="avatar-sm cursor-pointer" onclick="navigate('profile/${esc(u.username)}')">${esc(initials(u.username))}</div>
+        <div class="flex-1 min-w-0">
+          <button class="font-semibold text-sm text-zinc-100 hover:underline truncate block w-full text-left"
+            onclick="navigate('profile/${esc(u.username)}')">${esc(u.username)}</button>
+          ${u.usernode_pubkey ? `<span class="text-violet-400 text-xs inline-flex items-center gap-0.5">${ICON_CHAIN} ${esc(abbrevPubkey(u.usernode_pubkey))}</span>` : ''}
+        </div>
+        <button class="shrink-0 px-3 py-1 rounded-full bg-zinc-100 text-zinc-950 text-xs font-bold hover:bg-white transition-colors"
+          onclick="handleFollowSuggestion('${esc(u.username)}', this)">Follow</button>
+      </div>
+    `).join('');
+  } catch (e) {
+    const el2 = document.getElementById('explore-suggestions-list');
+    if (el2) el2.innerHTML = '<p class="px-4 py-3 text-zinc-500 text-sm">Could not load suggestions.</p>';
+  }
+}
+
+async function loadExploreTrendingTopics() {
+  const el = document.getElementById('explore-trending-topics');
+  if (!el) return;
+  try {
+    const data = await api('/api/hashtags/trending');
+    const tags = data.tags || [];
+    if (!tags.length) return;
+    el.innerHTML = '<div class="rounded-2xl bg-zinc-900 border border-zinc-800 overflow-hidden">'
+      + '<h3 class="font-bold text-lg px-4 pt-4 pb-2 border-b border-zinc-800">Trending Topics</h3>'
+      + '<div>'
+      + tags.map(function(t) {
+          return '<div class="flex items-center justify-between px-4 py-3 hover:bg-zinc-800/60 transition-colors cursor-pointer"'
+               + ' onclick="navigate(\'hashtag/' + esc(t.tag) + '\')">'
+               + '<span class="text-violet-400 font-semibold text-sm">#' + esc(t.tag) + '</span>'
+               + '<span class="text-zinc-500 text-xs">' + t.count + ' post' + (t.count !== 1 ? 's' : '') + '</span>'
+               + '</div>';
+        }).join('')
+      + '</div></div>';
+  } catch (e) {}
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 function navigate(route) {
   location.hash = route;
@@ -913,6 +990,8 @@ function handleRoute() {
     renderThreadView(hash.slice('pulse/'.length));
   } else if (hash.startsWith('hashtag/')) {
     renderHashtagFeed(decodeURIComponent(hash.slice('hashtag/'.length)));
+  } else if (hash === 'explore') {
+    renderExplore();
   } else {
     renderFeed();
   }

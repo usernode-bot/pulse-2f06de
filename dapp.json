@@ -2,13 +2,54 @@
   "name": "Pulse",
   "secrets": [],
   "tests": [
-    { "path": "/", "name": "Feed renders", "expectSelector": "#feed-tabs" },
-    { "path": "/", "name": "Trending tab present", "expectText": "Trending" },
-    { "path": "/", "name": "Live Beats tab present", "expectText": "Live Beats" },
-    { "path": "/", "name": "Following tab present", "expectText": "Following" },
-    { "path": "/", "name": "Compose box present", "expectSelector": "#compose-box" },
-    { "path": "/#search", "name": "Search input present", "expectSelector": "#search-input" },
-    { "path": "/#hashtag/web3", "name": "Hashtag feed renders", "expectSelector": "#feed-pulses" },
-    { "path": "/", "name": "Trending Topics panel present", "expectSelector": "#trending-topics" }
-  ]
+    {
+      "path": "/",
+      "name": "Feed renders",
+      "expectSelector": "#feed-tabs"
+    },
+    {
+      "path": "/",
+      "name": "Trending tab present",
+      "expectText": "Trending"
+    },
+    {
+      "path": "/",
+      "name": "Live Beats tab present",
+      "expectText": "Live Beats"
+    },
+    {
+      "path": "/",
+      "name": "Following tab present",
+      "expectText": "Following"
+    },
+    {
+      "path": "/",
+      "name": "Compose box present",
+      "expectSelector": "#compose-box"
+    },
+    {
+      "path": "/#search",
+      "name": "Search input present",
+      "expectSelector": "#search-input"
+    },
+    {
+      "path": "/#hashtag/web3",
+      "name": "Hashtag feed renders",
+      "expectSelector": "#feed-pulses"
+    },
+    {
+      "path": "/",
+      "name": "Trending Topics panel present",
+      "expectSelector": "#trending-topics"
+    },
+    {
+      "path": "/#explore",
+      "name": "Explore page renders",
+      "expectSelector": "#explore-suggestions-list"
+    }
+  ],
+  "visibility": {
+    "build": "private",
+    "view": "public"
+  }
 }
