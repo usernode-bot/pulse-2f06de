@@ -9,7 +9,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const JWT_SECRET = process.env.JWT_SECRET;
 const IS_STAGING = process.env.USERNODE_ENV === 'staging';
 
-const PUBLIC_API_PATHS = new Set(['/health']);
+const PUBLIC_API_PATHS = new Set(['/health', '/api/hashtags/trending']);
 const PUBLIC_PREFIXES = ['/explorer-api/'];
 
 app.use(express.json());
@@ -28,6 +28,17 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
+// ── Hashtag extraction ─────────────────────────────────────────────────────────
+
+function extractHashtags(content) {
+  const tags = new Set();
+  for (const m of content.matchAll(/#([a-zA-Z0-9_]{1,50})/g)) {
+    const tag = m[1].toLowerCase();
+    if (!/^\d+$/.test(tag)) tags.add(tag);
+  }
+  return Array.from(tags);
+}
 
 // ── Feed ──────────────────────────────────────────────────────────────────────
 
@@ -122,6 +133,11 @@ app.post('/api/pulses', async (req, res) => {
       RETURNING id, user_id, username, usernode_pubkey, content, signature, sign_message, created_at
     `, [req.user.id, req.user.username, pubkey || req.user.usernode_pubkey || null,
         content.trim(), signature || null, sign_message || null]);
+    const tags = extractHashtags(content.trim());
+    if (tags.length > 0) {
+      const vals = tags.map((_, i) => `($1, $${i + 2})`).join(', ');
+      pool.query(`INSERT INTO pulse_hashtags (pulse_id, tag) VALUES ${vals}`, [rows[0].id, ...tags]).catch(() => {});
+    }
     res.json({ pulse: { ...rows[0], like_count: 0, comment_count: 0, liked_by_me: false } });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -412,6 +428,52 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
+// ── Hashtags ──────────────────────────────────────────────────────────────────
+
+app.get('/api/hashtags/trending', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT ph.tag, COUNT(*)::int AS count
+      FROM pulse_hashtags ph
+      JOIN pulses p ON ph.pulse_id = p.id
+      WHERE p.deleted_at IS NULL
+        AND ph.created_at > NOW() - INTERVAL '24 hours'
+      GROUP BY ph.tag
+      ORDER BY count DESC, ph.tag ASC
+      LIMIT 8
+    `);
+    res.json({ tags: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/hashtags/:tag/pulses', async (req, res) => {
+  try {
+    const offset = parseInt(req.query.offset) || 0;
+    const userId = req.user ? req.user.id : null;
+    const { rows } = await pool.query(`
+      SELECT p.id, p.user_id, p.username, p.usernode_pubkey, p.content,
+             p.signature, p.sign_message, p.created_at,
+             COUNT(DISTINCT l.id)::int AS like_count,
+             COUNT(DISTINCT c.id)::int AS comment_count,
+             BOOL_OR(l.user_id = $1) AS liked_by_me
+      FROM pulses p
+      JOIN pulse_hashtags ph ON ph.pulse_id = p.id
+      LEFT JOIN pulse_likes l ON l.pulse_id = p.id
+      LEFT JOIN pulse_comments c ON c.pulse_id = p.id
+      WHERE ph.tag = lower($2)
+        AND p.deleted_at IS NULL
+      GROUP BY p.id
+      ORDER BY p.created_at DESC
+      LIMIT 20 OFFSET $3
+    `, [userId, req.params.tag, offset]);
+    res.json({ pulses: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Static & Shell ────────────────────────────────────────────────────────────
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
@@ -480,6 +542,14 @@ async function start() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(follower_id, following_id)
     );
+    CREATE TABLE IF NOT EXISTS pulse_hashtags (
+      id SERIAL PRIMARY KEY,
+      pulse_id INTEGER REFERENCES pulses(id) ON DELETE CASCADE,
+      tag VARCHAR(100) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_pulse_hashtags_tag ON pulse_hashtags(tag);
+    CREATE INDEX IF NOT EXISTS idx_pulse_hashtags_created_at ON pulse_hashtags(created_at);
   `);
 
   if (IS_STAGING) {
@@ -516,6 +586,42 @@ async function start() {
         (900010, 99990005, 'staging-pulse-eve', 'ut1staging000eve',
          'Shoutout to everyone who''s been signing their posts from day one.',
          'staging-sig-010', NOW() - INTERVAL '36 hours')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Hashtag seed posts (900011–900020) — used to populate Trending Topics panel
+    await pool.query(`
+      INSERT INTO pulses (id, user_id, username, usernode_pubkey, content, signature, created_at) VALUES
+        (900011, 99990001, 'staging-pulse-alice', 'ut1staging000alice',
+         'The future of decentralized social is here! #web3 #blockchain',
+         'staging-sig-011', NOW() - INTERVAL '1 hour'),
+        (900012, 99990001, 'staging-pulse-alice', 'ut1staging000alice',
+         'Loving the vibes on #pulse today. This community is everything! #usernode',
+         'staging-sig-012', NOW() - INTERVAL '2 hours'),
+        (900013, 99990002, 'staging-pulse-bob', 'ut1staging000bob',
+         'Gm everyone! Great day to be building on #web3 #gm',
+         'staging-sig-013', NOW() - INTERVAL '3 hours'),
+        (900014, 99990002, 'staging-pulse-bob', 'ut1staging000bob',
+         'The #blockchain space is evolving so fast. Staying bullish on #crypto',
+         'staging-sig-014', NOW() - INTERVAL '4 hours'),
+        (900015, 99990003, 'staging-pulse-carol', 'ut1staging000carol',
+         'Just found my new home on #pulse. Never going back to web2! #web3',
+         'staging-sig-015', NOW() - INTERVAL '5 hours'),
+        (900016, 99990003, 'staging-pulse-carol', 'ut1staging000carol',
+         'Good morning from the Usernode community! #gm #usernode',
+         'staging-sig-016', NOW() - INTERVAL '6 hours'),
+        (900017, 99990001, 'staging-pulse-alice', 'ut1staging000alice',
+         'Building something on #pulse right now. #crypto and #defi are going to change everything.',
+         'staging-sig-017', NOW() - INTERVAL '7 hours'),
+        (900018, 99990002, 'staging-pulse-bob', 'ut1staging000bob',
+         'The #blockchain revolution is just getting started. #web3 forever.',
+         'staging-sig-018', NOW() - INTERVAL '8 hours'),
+        (900019, 99990003, 'staging-pulse-carol', 'ut1staging000carol',
+         'Signed my first on-chain post today. What a time to be alive.',
+         'staging-sig-019', NOW() - INTERVAL '9 hours'),
+        (900020, 99990001, 'staging-pulse-alice', 'ut1staging000alice',
+         'The future is decentralized. Keep building.',
+         'staging-sig-020', NOW() - INTERVAL '10 hours')
       ON CONFLICT (id) DO NOTHING
     `);
 
@@ -567,6 +673,29 @@ async function start() {
         (99990003, 'staging-pulse-carol', 99990004, 'staging-pulse-dave'),
         (99990004, 'staging-pulse-dave', 99990003, 'staging-pulse-carol')
       ON CONFLICT (follower_id, following_id) DO NOTHING
+    `);
+
+    // Hashtag rows for the seed posts — powers the Trending Topics panel
+    await pool.query(`
+      INSERT INTO pulse_hashtags (id, pulse_id, tag, created_at) VALUES
+        (9100001, 900011, 'web3',       NOW() - INTERVAL '1 hour'),
+        (9100002, 900011, 'blockchain', NOW() - INTERVAL '1 hour'),
+        (9100003, 900012, 'pulse',      NOW() - INTERVAL '2 hours'),
+        (9100004, 900012, 'usernode',   NOW() - INTERVAL '2 hours'),
+        (9100005, 900013, 'web3',       NOW() - INTERVAL '3 hours'),
+        (9100006, 900013, 'gm',         NOW() - INTERVAL '3 hours'),
+        (9100007, 900014, 'blockchain', NOW() - INTERVAL '4 hours'),
+        (9100008, 900014, 'crypto',     NOW() - INTERVAL '4 hours'),
+        (9100009, 900015, 'pulse',      NOW() - INTERVAL '5 hours'),
+        (9100010, 900015, 'web3',       NOW() - INTERVAL '5 hours'),
+        (9100011, 900016, 'gm',         NOW() - INTERVAL '6 hours'),
+        (9100012, 900016, 'usernode',   NOW() - INTERVAL '6 hours'),
+        (9100013, 900017, 'pulse',      NOW() - INTERVAL '7 hours'),
+        (9100014, 900017, 'crypto',     NOW() - INTERVAL '7 hours'),
+        (9100015, 900017, 'defi',       NOW() - INTERVAL '7 hours'),
+        (9100016, 900018, 'blockchain', NOW() - INTERVAL '8 hours'),
+        (9100017, 900018, 'web3',       NOW() - INTERVAL '8 hours')
+      ON CONFLICT (id) DO NOTHING
     `);
   }
 }
