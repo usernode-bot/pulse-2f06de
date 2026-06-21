@@ -7,29 +7,21 @@ const app = express();
 const port = process.env.PORT || 3000;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const JWT_SECRET = process.env.JWT_SECRET;
+const IS_STAGING = process.env.USERNODE_ENV === 'staging';
 
-// Paths that stay open without authentication. Add a path here (and add it
-// with `app.get`/`app.post` below) if you deliberately want it public.
-// Everything else requires a valid platform-issued JWT.
 const PUBLIC_API_PATHS = new Set(['/health']);
+const PUBLIC_PREFIXES = ['/explorer-api/'];
 
 app.use(express.json());
 
-// Verify platform-issued JWT if one was passed, then enforce auth on
-// anything not explicitly marked public. The iframe adds `?token=…`
-// on load; the frontend script forwards the token via `x-usernode-token`
-// on subsequent fetches.
 app.use((req, res, next) => {
   const token = req.query.token || req.headers['x-usernode-token'];
   if (token && JWT_SECRET) {
     try { req.user = jwt.verify(token, JWT_SECRET); } catch {}
   }
-
-  // Static assets (CSS/JS/images) are always served; the API and the HTML
-  // shell are gated so direct hits to the staging/prod subdomain don't
-  // leak app data to the public internet.
   if (req.method !== 'GET' || req.path.startsWith('/api/')) {
     if (PUBLIC_API_PATHS.has(req.path)) return next();
+    if (PUBLIC_PREFIXES.some((p) => req.path.startsWith(p))) return next();
     if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
   }
   next();
@@ -37,38 +29,395 @@ app.use((req, res, next) => {
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
-// Button press
-app.post('/api/press', async (req, res) => {
+// ── Feed ──────────────────────────────────────────────────────────────────────
+
+app.get('/api/feed/trending', async (req, res) => {
   try {
-    await pool.query(`
-      INSERT INTO presses (user_id, username) VALUES ($1, $2)
-    `, [req.user.id, req.user.username]);
+    const offset = parseInt(req.query.offset) || 0;
+    const userId = req.user ? req.user.id : null;
+    const { rows } = await pool.query(`
+      SELECT p.id, p.user_id, p.username, p.usernode_pubkey, p.content,
+             p.signature, p.sign_message, p.created_at,
+             COUNT(DISTINCT l.id)::int AS like_count,
+             COUNT(DISTINCT c.id)::int AS comment_count,
+             BOOL_OR(l.user_id = $1) AS liked_by_me
+      FROM pulses p
+      LEFT JOIN pulse_likes l ON l.pulse_id = p.id
+      LEFT JOIN pulse_comments c ON c.pulse_id = p.id
+      WHERE p.deleted_at IS NULL
+        AND p.created_at > NOW() - INTERVAL '48 hours'
+      GROUP BY p.id
+      ORDER BY (COUNT(DISTINCT l.id) + COUNT(DISTINCT c.id) * 2) DESC, p.created_at DESC
+      LIMIT 20 OFFSET $2
+    `, [userId, offset]);
+    res.json({ pulses: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/feed/following', async (req, res) => {
+  try {
+    const offset = parseInt(req.query.offset) || 0;
+    const userId = req.user.id;
+    const { rows } = await pool.query(`
+      SELECT p.id, p.user_id, p.username, p.usernode_pubkey, p.content,
+             p.signature, p.sign_message, p.created_at,
+             COUNT(DISTINCT l.id)::int AS like_count,
+             COUNT(DISTINCT c.id)::int AS comment_count,
+             BOOL_OR(l.user_id = $1) AS liked_by_me
+      FROM pulses p
+      INNER JOIN pulse_follows f ON f.following_id = p.user_id AND f.follower_id = $1
+      LEFT JOIN pulse_likes l ON l.pulse_id = p.id
+      LEFT JOIN pulse_comments c ON c.pulse_id = p.id
+      WHERE p.deleted_at IS NULL
+      GROUP BY p.id
+      ORDER BY p.created_at DESC
+      LIMIT 20 OFFSET $2
+    `, [userId, offset]);
+    res.json({ pulses: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/feed/live', async (req, res) => {
+  try {
+    const offset = parseInt(req.query.offset) || 0;
+    const userId = req.user ? req.user.id : null;
+    const { rows } = await pool.query(`
+      SELECT p.id, p.user_id, p.username, p.usernode_pubkey, p.content,
+             p.signature, p.sign_message, p.created_at,
+             COUNT(DISTINCT l.id)::int AS like_count,
+             COUNT(DISTINCT c.id)::int AS comment_count,
+             BOOL_OR(l.user_id = $1) AS liked_by_me
+      FROM pulses p
+      LEFT JOIN pulse_likes l ON l.pulse_id = p.id
+      LEFT JOIN pulse_comments c ON c.pulse_id = p.id
+      WHERE p.deleted_at IS NULL
+      GROUP BY p.id
+      ORDER BY p.created_at DESC
+      LIMIT 20 OFFSET $2
+    `, [userId, offset]);
+    res.json({ pulses: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Pulses ────────────────────────────────────────────────────────────────────
+
+app.post('/api/pulses', async (req, res) => {
+  try {
+    const { content, signature, sign_message, pubkey } = req.body;
+    if (!content || content.trim().length === 0) {
+      return res.status(400).json({ error: 'Content is required' });
+    }
+    if (content.length > 280) {
+      return res.status(400).json({ error: 'Content exceeds 280 characters' });
+    }
+    const { rows } = await pool.query(`
+      INSERT INTO pulses (user_id, username, usernode_pubkey, content, signature, sign_message)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, user_id, username, usernode_pubkey, content, signature, sign_message, created_at
+    `, [req.user.id, req.user.username, pubkey || req.user.usernode_pubkey || null,
+        content.trim(), signature || null, sign_message || null]);
+    res.json({ pulse: { ...rows[0], like_count: 0, comment_count: 0, liked_by_me: false } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/pulses/:id', async (req, res) => {
+  try {
+    const userId = req.user ? req.user.id : null;
+    const { rows } = await pool.query(`
+      SELECT p.id, p.user_id, p.username, p.usernode_pubkey, p.content,
+             p.signature, p.sign_message, p.created_at,
+             COUNT(DISTINCT l.id)::int AS like_count,
+             COUNT(DISTINCT c.id)::int AS comment_count,
+             BOOL_OR(l.user_id = $1) AS liked_by_me
+      FROM pulses p
+      LEFT JOIN pulse_likes l ON l.pulse_id = p.id
+      LEFT JOIN pulse_comments c ON c.pulse_id = p.id
+      WHERE p.id = $2 AND p.deleted_at IS NULL
+      GROUP BY p.id
+    `, [userId, req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json({ pulse: rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/pulses/:id', async (req, res) => {
+  try {
+    const { rowCount } = await pool.query(`
+      UPDATE pulses SET deleted_at = NOW()
+      WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+    `, [req.params.id, req.user.id]);
+    if (!rowCount) return res.status(404).json({ error: 'Not found or not yours' });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Leaderboard
-app.get('/api/leaderboard', async (_req, res) => {
+// ── Likes ─────────────────────────────────────────────────────────────────────
+
+app.post('/api/pulses/:id/like', async (req, res) => {
   try {
-    const { rows } = await pool.query(`
-      SELECT username, COUNT(*) as presses
-      FROM presses
-      GROUP BY username
-      ORDER BY presses DESC
-      LIMIT 50
-    `);
-    res.json({ leaderboard: rows });
+    const { signature, sign_message, pubkey } = req.body;
+    await pool.query(`
+      INSERT INTO pulse_likes (pulse_id, user_id, username, usernode_pubkey, signature, sign_message)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (pulse_id, user_id) DO NOTHING
+    `, [req.params.id, req.user.id, req.user.username,
+        pubkey || req.user.usernode_pubkey || null,
+        signature || null, sign_message || null]);
+    const { rows } = await pool.query(
+      'SELECT COUNT(*)::int AS like_count FROM pulse_likes WHERE pulse_id = $1',
+      [req.params.id]
+    );
+    res.json({ ok: true, like_count: rows[0].like_count });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+app.delete('/api/pulses/:id/like', async (req, res) => {
+  try {
+    await pool.query(
+      'DELETE FROM pulse_likes WHERE pulse_id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
+    const { rows } = await pool.query(
+      'SELECT COUNT(*)::int AS like_count FROM pulse_likes WHERE pulse_id = $1',
+      [req.params.id]
+    );
+    res.json({ ok: true, like_count: rows[0].like_count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Comments ──────────────────────────────────────────────────────────────────
+
+app.get('/api/pulses/:id/comments', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, user_id, username, usernode_pubkey, content, signature, sign_message, created_at
+      FROM pulse_comments
+      WHERE pulse_id = $1
+      ORDER BY created_at ASC
+    `, [req.params.id]);
+    res.json({ comments: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/pulses/:id/comments', async (req, res) => {
+  try {
+    const { content, signature, sign_message, pubkey } = req.body;
+    if (!content || content.trim().length === 0) {
+      return res.status(400).json({ error: 'Content is required' });
+    }
+    if (content.length > 280) {
+      return res.status(400).json({ error: 'Content exceeds 280 characters' });
+    }
+    const pulseCheck = await pool.query(
+      'SELECT id FROM pulses WHERE id = $1 AND deleted_at IS NULL',
+      [req.params.id]
+    );
+    if (!pulseCheck.rows.length) return res.status(404).json({ error: 'Pulse not found' });
+
+    const { rows } = await pool.query(`
+      INSERT INTO pulse_comments (pulse_id, user_id, username, usernode_pubkey, content, signature, sign_message)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, user_id, username, usernode_pubkey, content, signature, sign_message, created_at
+    `, [req.params.id, req.user.id, req.user.username,
+        pubkey || req.user.usernode_pubkey || null,
+        content.trim(), signature || null, sign_message || null]);
+    res.json({ comment: rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Users / Profiles ──────────────────────────────────────────────────────────
+
+app.get('/api/users/:username', async (req, res) => {
+  try {
+    const { username } = req.params;
+    const meId = req.user ? req.user.id : null;
+
+    const [pulseRes, followersRes, followingRes, pubkeyRes] = await Promise.all([
+      pool.query(
+        'SELECT COUNT(*)::int AS pulse_count FROM pulses WHERE username = $1 AND deleted_at IS NULL',
+        [username]
+      ),
+      pool.query(
+        'SELECT COUNT(*)::int AS follower_count FROM pulse_follows WHERE following_username = $1',
+        [username]
+      ),
+      pool.query(
+        'SELECT COUNT(*)::int AS following_count FROM pulse_follows WHERE follower_username = $1',
+        [username]
+      ),
+      pool.query(
+        'SELECT usernode_pubkey FROM pulses WHERE username = $1 AND usernode_pubkey IS NOT NULL ORDER BY created_at DESC LIMIT 1',
+        [username]
+      ),
+    ]);
+
+    let is_following = false;
+    if (meId) {
+      const fRes = await pool.query(
+        'SELECT 1 FROM pulse_follows WHERE follower_id = $1 AND following_username = $2',
+        [meId, username]
+      );
+      is_following = fRes.rows.length > 0;
+    }
+
+    res.json({
+      username,
+      usernode_pubkey: pubkeyRes.rows[0]?.usernode_pubkey || null,
+      pulse_count: pulseRes.rows[0].pulse_count,
+      follower_count: followersRes.rows[0].follower_count,
+      following_count: followingRes.rows[0].following_count,
+      is_following,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/users/:username/pulses', async (req, res) => {
+  try {
+    const offset = parseInt(req.query.offset) || 0;
+    const userId = req.user ? req.user.id : null;
+    const { rows } = await pool.query(`
+      SELECT p.id, p.user_id, p.username, p.usernode_pubkey, p.content,
+             p.signature, p.sign_message, p.created_at,
+             COUNT(DISTINCT l.id)::int AS like_count,
+             COUNT(DISTINCT c.id)::int AS comment_count,
+             BOOL_OR(l.user_id = $1) AS liked_by_me
+      FROM pulses p
+      LEFT JOIN pulse_likes l ON l.pulse_id = p.id
+      LEFT JOIN pulse_comments c ON c.pulse_id = p.id
+      WHERE p.username = $2 AND p.deleted_at IS NULL
+      GROUP BY p.id
+      ORDER BY p.created_at DESC
+      LIMIT 20 OFFSET $3
+    `, [userId, req.params.username, offset]);
+    res.json({ pulses: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/users/:username/follow', async (req, res) => {
+  try {
+    const { username } = req.params;
+    if (username === req.user.username) {
+      return res.status(400).json({ error: 'Cannot follow yourself' });
+    }
+    // Resolve target user_id from their most recent pulse
+    const targetRes = await pool.query(
+      'SELECT user_id FROM pulses WHERE username = $1 LIMIT 1',
+      [username]
+    );
+    const targetId = targetRes.rows[0]?.user_id || 0;
+    await pool.query(`
+      INSERT INTO pulse_follows (follower_id, follower_username, following_id, following_username)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (follower_id, following_id) DO NOTHING
+    `, [req.user.id, req.user.username, targetId, username]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/users/:username/follow', async (req, res) => {
+  try {
+    await pool.query(
+      'DELETE FROM pulse_follows WHERE follower_id = $1 AND following_username = $2',
+      [req.user.id, req.params.username]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Suggestions (who to follow) ───────────────────────────────────────────────
+
+app.get('/api/suggestions', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT DISTINCT username, usernode_pubkey
+      FROM pulses
+      WHERE username != $1 AND deleted_at IS NULL
+        AND username NOT IN (
+          SELECT following_username FROM pulse_follows WHERE follower_id = $2
+        )
+      ORDER BY username
+      LIMIT 5
+    `, [req.user.username, req.user.id]);
+    res.json({ suggestions: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Search ────────────────────────────────────────────────────────────────────
+
+app.get('/api/search', async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+    if (!q) return res.json({ users: [], pulses: [] });
+    const term = '%' + q + '%';
+    const userId = req.user ? req.user.id : null;
+
+    const [usersRes, pulsesRes] = await Promise.all([
+      pool.query(`
+        SELECT username, MAX(usernode_pubkey) AS usernode_pubkey
+        FROM pulses
+        WHERE deleted_at IS NULL AND username ILIKE $1
+        GROUP BY username
+        ORDER BY username
+        LIMIT 10
+      `, [term]),
+      pool.query(`
+        SELECT p.id, p.user_id, p.username, p.usernode_pubkey, p.content,
+               p.signature, p.sign_message, p.created_at,
+               COUNT(DISTINCT l.id)::int AS like_count,
+               COUNT(DISTINCT c.id)::int AS comment_count,
+               BOOL_OR(l.user_id = $1) AS liked_by_me
+        FROM pulses p
+        LEFT JOIN pulse_likes l ON l.pulse_id = p.id
+        LEFT JOIN pulse_comments c ON c.pulse_id = p.id
+        WHERE p.deleted_at IS NULL AND p.content ILIKE $2
+        GROUP BY p.id
+        ORDER BY p.created_at DESC
+        LIMIT 20
+      `, [userId, term]),
+    ]);
+
+    res.json({ users: usersRes.rows, pulses: pulsesRes.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Static & Shell ────────────────────────────────────────────────────────────
+
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 app.use(express.static(path.join(__dirname, 'public')));
 
-// HTML shell: serve the app if authenticated, otherwise an "open in Usernode"
-// landing page so stray visits to the staging URL don't reveal the app.
 app.get('*', (req, res) => {
   if (!req.user) {
     return res.status(401).send(`<!doctype html><meta charset=utf-8><title>Open in Usernode</title>
@@ -83,16 +432,143 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// ── Schema + Seed ─────────────────────────────────────────────────────────────
+
 async function start() {
+  app.listen(port, () => console.log(`Listening on :${port}`));
+
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS presses (
+    CREATE TABLE IF NOT EXISTS pulses (
       id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL,
       username VARCHAR(255) NOT NULL,
+      usernode_pubkey VARCHAR(255),
+      content TEXT NOT NULL,
+      signature TEXT,
+      sign_message TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted_at TIMESTAMPTZ
+    );
+    CREATE TABLE IF NOT EXISTS pulse_likes (
+      id SERIAL PRIMARY KEY,
+      pulse_id INTEGER REFERENCES pulses(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL,
+      username VARCHAR(255) NOT NULL,
+      usernode_pubkey VARCHAR(255),
+      signature TEXT,
+      sign_message TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(pulse_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS pulse_comments (
+      id SERIAL PRIMARY KEY,
+      pulse_id INTEGER REFERENCES pulses(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL,
+      username VARCHAR(255) NOT NULL,
+      usernode_pubkey VARCHAR(255),
+      content TEXT NOT NULL,
+      signature TEXT,
+      sign_message TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
-    )
+    );
+    CREATE TABLE IF NOT EXISTS pulse_follows (
+      id SERIAL PRIMARY KEY,
+      follower_id INTEGER NOT NULL,
+      follower_username VARCHAR(255) NOT NULL,
+      following_id INTEGER NOT NULL,
+      following_username VARCHAR(255) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(follower_id, following_id)
+    );
   `);
-  app.listen(port, () => console.log(`Listening on :${port}`));
+
+  if (IS_STAGING) {
+    // Insert seed pulses (10 posts across 5 fake users)
+    await pool.query(`
+      INSERT INTO pulses (id, user_id, username, usernode_pubkey, content, signature, created_at) VALUES
+        (900001, 99990001, 'staging-pulse-alice', 'ut1staging000alice',
+         'Usernode just hit a new milestone! The community keeps growing.',
+         'staging-sig-001', NOW() - INTERVAL '1 hour'),
+        (900002, 99990001, 'staging-pulse-alice', 'ut1staging000alice',
+         'On-chain identity is the future. No more anonymous spam.',
+         'staging-sig-002', NOW() - INTERVAL '5 hours'),
+        (900003, 99990002, 'staging-pulse-bob', 'ut1staging000bob',
+         'Anyone else excited about the Pulse launch? This is how social should work.',
+         'staging-sig-003', NOW() - INTERVAL '2 hours'),
+        (900004, 99990002, 'staging-pulse-bob', 'ut1staging000bob',
+         'Just verified my first transaction. Feels good to own your data.',
+         'staging-sig-004', NOW() - INTERVAL '8 hours'),
+        (900005, 99990003, 'staging-pulse-carol', 'ut1staging000carol',
+         'Reminder: your wallet is your identity. Guard it well.',
+         'staging-sig-005', NOW() - INTERVAL '3 hours'),
+        (900006, 99990003, 'staging-pulse-carol', 'ut1staging000carol',
+         'Three months on Usernode and I haven''t looked back.',
+         'staging-sig-006', NOW() - INTERVAL '12 hours'),
+        (900007, 99990004, 'staging-pulse-dave', 'ut1staging000dave',
+         'Building in public on Usernode. Thread incoming.',
+         'staging-sig-007', NOW() - INTERVAL '6 hours'),
+        (900008, 99990005, 'staging-pulse-eve', 'ut1staging000eve',
+         'The vibe on here is just different. Healthy discourse.',
+         'staging-sig-008', NOW() - INTERVAL '4 hours'),
+        (900009, 99990005, 'staging-pulse-eve', 'ut1staging000eve',
+         'Who''s coming to the next community call?',
+         'staging-sig-009', NOW() - INTERVAL '10 hours'),
+        (900010, 99990005, 'staging-pulse-eve', 'ut1staging000eve',
+         'Shoutout to everyone who''s been signing their posts from day one.',
+         'staging-sig-010', NOW() - INTERVAL '36 hours')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Likes — spread to make alice and bob trending
+    await pool.query(`
+      INSERT INTO pulse_likes (pulse_id, user_id, username) VALUES
+        (900001, 99990002, 'staging-pulse-bob'),
+        (900001, 99990003, 'staging-pulse-carol'),
+        (900001, 99990004, 'staging-pulse-dave'),
+        (900001, 99990005, 'staging-pulse-eve'),
+        (900002, 99990002, 'staging-pulse-bob'),
+        (900002, 99990003, 'staging-pulse-carol'),
+        (900002, 99990004, 'staging-pulse-dave'),
+        (900003, 99990001, 'staging-pulse-alice'),
+        (900003, 99990003, 'staging-pulse-carol'),
+        (900003, 99990004, 'staging-pulse-dave'),
+        (900003, 99990005, 'staging-pulse-eve'),
+        (900004, 99990001, 'staging-pulse-alice'),
+        (900004, 99990003, 'staging-pulse-carol'),
+        (900005, 99990001, 'staging-pulse-alice'),
+        (900005, 99990002, 'staging-pulse-bob'),
+        (900006, 99990001, 'staging-pulse-alice'),
+        (900007, 99990001, 'staging-pulse-alice'),
+        (900007, 99990003, 'staging-pulse-carol'),
+        (900008, 99990001, 'staging-pulse-alice'),
+        (900009, 99990002, 'staging-pulse-bob')
+      ON CONFLICT (pulse_id, user_id) DO NOTHING
+    `);
+
+    // Comments
+    await pool.query(`
+      INSERT INTO pulse_comments (id, pulse_id, user_id, username, usernode_pubkey, content) VALUES
+        (9000001, 900001, 99990002, 'staging-pulse-bob', 'ut1staging000bob', 'Totally agree! The growth has been incredible.'),
+        (9000002, 900003, 99990001, 'staging-pulse-alice', 'ut1staging000alice', 'Same here! Pulse is going to change everything.'),
+        (9000003, 900005, 99990004, 'staging-pulse-dave', 'ut1staging000dave', 'Wise words. Backed up my seed phrase again after reading this.'),
+        (9000004, 900007, 99990003, 'staging-pulse-carol', 'ut1staging000carol', 'Following this thread closely!'),
+        (9000005, 900009, 99990004, 'staging-pulse-dave', 'ut1staging000dave', 'I''ll be there! Who else?')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Follows
+    await pool.query(`
+      INSERT INTO pulse_follows (follower_id, follower_username, following_id, following_username) VALUES
+        (99990001, 'staging-pulse-alice', 99990002, 'staging-pulse-bob'),
+        (99990001, 'staging-pulse-alice', 99990003, 'staging-pulse-carol'),
+        (99990002, 'staging-pulse-bob', 99990001, 'staging-pulse-alice'),
+        (99990003, 'staging-pulse-carol', 99990001, 'staging-pulse-alice'),
+        (99990003, 'staging-pulse-carol', 99990002, 'staging-pulse-bob'),
+        (99990003, 'staging-pulse-carol', 99990004, 'staging-pulse-dave'),
+        (99990004, 'staging-pulse-dave', 99990003, 'staging-pulse-carol')
+      ON CONFLICT (follower_id, following_id) DO NOTHING
+    `);
+  }
 }
 
 start().catch(err => { console.error(err); process.exit(1); });
