@@ -300,10 +300,7 @@ async function anchorPost(content) {
     const r = result;
     console.log('sendTransaction raw response:', JSON.stringify(r));
     if (r?.queued === true && !r?.tx) return null;
-    const txId = r?.result?.txId || r?.result?.tx?.id
-        || r?.tx_id || r?.txid || r?.txId || r?.hash || r?.tx_hash || r?.txHash || r?.id
-        || r?.tx?.tx_id || r?.tx?.txid || r?.tx?.txId || r?.tx?.hash || r?.tx?.tx_hash || r?.tx?.txHash || r?.tx?.id
-        || null;
+    const txId = r?.hash || r?.tx?.id || r?.result?.tx?.id || r?.txid || r?.result?.txId || null;
     return txId || 'submitted';
   } catch (e) {
     if (!e?.message?.toLowerCase().includes('cancel')) {
