@@ -156,6 +156,8 @@
             <div class="px-4 py-3 text-zinc-500 text-sm">Loading…</div>
           </div>
         </div>
+        <!-- Trending topics panel (populated by loadTrendingTopics()) -->
+        <div id="trending-topics"></div>
         <!-- Footer note -->
         <p class="text-xs text-zinc-600 px-1 leading-relaxed">
           <span class="text-violet-500 font-semibold inline-flex items-center gap-1 align-middle"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline"><path d="M2 12h5l2-6 3 12 3-9 2 3h5"/></svg>Pulse</span> — heartbeat of Usernode.<br>
@@ -234,6 +236,16 @@ function esc(str) {
   return String(str || '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function linkHashtags(escapedText) {
+  return escapedText.replace(/#([a-zA-Z0-9_]+)/g, function(_, tag) {
+    var norm = tag.toLowerCase();
+    if (/^\d+$/.test(norm)) return '#' + tag;
+    return '<button class="text-violet-400 hover:text-violet-300 hover:underline"'
+         + ' style="display:inline;background:none;border:none;padding:0;cursor:pointer;font-size:inherit"'
+         + ' onclick="event.stopPropagation(); navigate(\'hashtag/' + norm + '\')">#' + tag + '</button>';
+  });
 }
 
 function navigateToProfile() {
@@ -393,7 +405,7 @@ function renderPulseCard(p, large) {
             ${hasSig ? `<span class="text-violet-400 inline-flex items-center gap-0.5 text-xs" title="Signed · ${esc(abbrevPubkey(p.usernode_pubkey))}">${ICON_CHAIN} <span class="hidden sm:inline">${esc(abbrevPubkey(p.usernode_pubkey))}</span></span>` : ''}
             <span class="text-zinc-500 text-xs">${timeAgo(p.created_at)}</span>
           </div>
-          <p class="${textCls} text-zinc-100 whitespace-pre-wrap break-words">${esc(p.content)}</p>
+          <p class="${textCls} text-zinc-100 whitespace-pre-wrap break-words">${linkHashtags(esc(p.content))}</p>
           <div class="flex items-center gap-6 mt-3">
             <button class="flex items-center gap-1.5 text-zinc-500 hover:text-violet-400 transition-colors text-sm group"
               onclick="event.stopPropagation(); handleLike(${p.id}, ${!!liked})" id="like-btn-${p.id}">
@@ -816,6 +828,73 @@ async function handleFollowSuggestion(username, btn) {
   showToast('Following ' + username);
 }
 
+// ── Hashtag feed ──────────────────────────────────────────────────────────────
+function renderHashtagFeed(tag) {
+  const main = document.getElementById('main-content');
+  main.innerHTML = `
+    <div class="flex items-center gap-3 px-4 py-3 border-b border-zinc-800 sticky top-14 lg:top-0 bg-zinc-950 z-10">
+      <button onclick="history.back()" class="p-1.5 rounded-full hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-100">${ICON_BACK}</button>
+      <h2 class="font-bold text-lg">#${esc(tag)}</h2>
+    </div>
+    <div id="feed-pulses"></div>
+  `;
+  loadHashtagPulses(tag, 0);
+}
+
+async function loadHashtagPulses(tag, offset) {
+  const container = document.getElementById('feed-pulses');
+  if (!container) return;
+  if (offset === 0) container.innerHTML = '<div class="flex items-center justify-center h-24 text-zinc-500 text-sm">Loading…</div>';
+
+  const data = await api('/api/hashtags/' + encodeURIComponent(tag) + '/pulses?offset=' + offset);
+  const pulses = data.pulses || [];
+
+  if (offset === 0) {
+    if (!pulses.length) {
+      container.innerHTML = '<div class="p-8 text-center text-zinc-500">No posts with #' + esc(tag) + ' yet.</div>';
+      return;
+    }
+    container.innerHTML = '';
+  }
+
+  pulses.forEach(function(p) {
+    const div = document.createElement('div');
+    div.setAttribute('data-pulse-id', p.id);
+    div.innerHTML = renderPulseCard(p);
+    container.appendChild(div);
+  });
+
+  if (pulses.length === 20) {
+    const lm = document.createElement('div');
+    lm.id = 'load-more';
+    lm.innerHTML = '<button class="w-full py-4 text-violet-400 hover:text-violet-300 text-sm font-semibold transition-colors border-t border-zinc-800"'
+      + ' onclick="loadHashtagPulses(\'' + esc(tag) + '\', ' + (offset + 20) + ')">Load more</button>';
+    container.appendChild(lm);
+  }
+}
+
+// ── Right sidebar: Trending topics ────────────────────────────────────────────
+async function loadTrendingTopics() {
+  const el = document.getElementById('trending-topics');
+  if (!el) return;
+  try {
+    const data = await api('/api/hashtags/trending');
+    const tags = data.tags || [];
+    if (!tags.length) return;
+    el.innerHTML = '<div class="rounded-2xl bg-zinc-900 border border-zinc-800 overflow-hidden mb-4">'
+      + '<h3 class="font-bold text-lg px-4 pt-4 pb-2 border-b border-zinc-800">Trending Topics</h3>'
+      + '<div>'
+      + tags.map(function(t) {
+          return '<div class="flex items-center justify-between px-4 py-3 hover:bg-zinc-800/60 transition-colors cursor-pointer"'
+               + ' onclick="navigate(\'hashtag/' + esc(t.tag) + '\')">'
+               + '<span class="text-violet-400 font-semibold text-sm">#' + esc(t.tag) + '</span>'
+               + '<span class="text-zinc-500 text-xs">' + t.count + ' post' + (t.count !== 1 ? 's' : '') + '</span>'
+               + '</div>';
+        }).join('')
+      + '</div></div>';
+  } catch (e) {}
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 function navigate(route) {
   location.hash = route;
@@ -832,6 +911,8 @@ function handleRoute() {
     renderProfile(decodeURIComponent(hash.slice('profile/'.length)));
   } else if (hash.startsWith('pulse/')) {
     renderThreadView(hash.slice('pulse/'.length));
+  } else if (hash.startsWith('hashtag/')) {
+    renderHashtagFeed(decodeURIComponent(hash.slice('hashtag/'.length)));
   } else {
     renderFeed();
   }
@@ -861,8 +942,9 @@ async function boot() {
   if (pubkeyEl) pubkeyEl.textContent = APP.me.usernode_pubkey ? abbrevPubkey(APP.me.usernode_pubkey) : '';
   if (avatarEl) avatarEl.textContent = initials(APP.me.username);
 
-  // Load right sidebar suggestions (non-blocking)
+  // Load right sidebar suggestions and trending topics (non-blocking)
   loadSuggestions();
+  loadTrendingTopics();
 
   // Route to initial view
   handleRoute();
