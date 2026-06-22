@@ -299,10 +299,12 @@ async function anchorPost(content) {
     );
     const r = result;
     console.log('sendTransaction raw response:', JSON.stringify(r));
+    console.log('anchorPost raw result:', r);
     if (r?.queued === true && !r?.tx) return null;
     const txId = r?.hash || r?.tx?.id || r?.result?.tx?.id || r?.txid || r?.result?.txId || null;
     return txId || 'submitted';
   } catch (e) {
+    console.error('anchorPost error:', e, e?.message, e?.stack);
     if (!e?.message?.toLowerCase().includes('cancel')) {
       showToast('Could not anchor post — please try again.', true);
     }
