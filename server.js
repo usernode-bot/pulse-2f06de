@@ -482,8 +482,8 @@ app.get('/api/features', (_req, res) => {
 });
 
 app.post('/api/llm/suggest', async (req, res) => {
-  if (!LLM_ENABLED) {
-    return res.json({ llmEnabled: false });
+  if (!LLM_ENABLED || !process.env.USERNODE_LLM_PROXY_URL) {
+    return res.status(503).json({ error: 'ai_unavailable' });
   }
   try {
     const resp = await fetch(`${process.env.USERNODE_LLM_PROXY_URL}/v1/messages`, {
@@ -604,6 +604,7 @@ async function start() {
   `);
 
   if (IS_STAGING) {
+    try {
     // Insert seed pulses (10 posts across 5 fake users)
     await pool.query(`
       INSERT INTO pulses (id, user_id, username, usernode_pubkey, content, signature, created_at) VALUES
@@ -748,6 +749,9 @@ async function start() {
         (9100017, 900018, 'web3',       NOW() - INTERVAL '8 hours')
       ON CONFLICT (id) DO NOTHING
     `);
+    } catch (err) {
+      console.error('Staging seed error (non-fatal):', err.message);
+    }
   }
 }
 

@@ -379,7 +379,9 @@ async function handleCompose(type) {
       showToast('Reply posted!');
     } else {
       btn.textContent = 'Signing…';
+      console.log('[compose] calling anchorPost');
       const txId = await anchorPost(content);
+      console.log('[compose] anchorPost returned:', txId);
       if (!txId) {
         btn.disabled = false;
         btn.textContent = originalLabel;
@@ -387,7 +389,9 @@ async function handleCompose(type) {
       }
       btn.textContent = 'Posting…';
       body = { content, signature: txId, sign_message: content, pubkey: APP.me.usernode_pubkey };
+      console.log('[compose] posting pulse, signature:', txId);
       res = await api('/api/pulses', { method: 'POST', body });
+      console.log('[compose] api/pulses response:', JSON.stringify(res));
       if (res.error) throw new Error(res.error);
       try { usernode.acknowledgeTransaction(txId); } catch (_) {}
       showToast('Pulse posted!');
@@ -469,6 +473,8 @@ async function handleSuggest() {
         ta.value = retry.suggestion;
         updateComposeCounter(ta);
       }
+    } else if (res.error === 'ai_unavailable') {
+      showToast('AI suggestions not available in this environment.', true);
     } else if (res.error === 'app_cap_exceeded' || res.error === 'budget_exceeded') {
       showToast('Daily AI limit reached — resets tomorrow.', true);
     } else if (res.suggestion) {
