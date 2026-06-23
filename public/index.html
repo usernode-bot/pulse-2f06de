@@ -208,6 +208,7 @@ const HEADERS = { 'Content-Type': 'application/json', ...(TOKEN ? { 'x-usernode-
 const APP = {
   me: { id: null, username: '', usernode_pubkey: null },
   currentTab: 'trending',
+  profileTab: 'posts',
   searchQuery: '',
 };
 
@@ -632,6 +633,7 @@ async function renderThreadView(pulseId) {
 
 // ── Profile page ──────────────────────────────────────────────────────────────
 async function renderProfile(username) {
+  APP.profileTab = 'posts';
   const main = document.getElementById('main-content');
   main.innerHTML = `
     <div class="flex items-center gap-3 px-4 py-3 border-b border-zinc-800 sticky top-14 lg:top-0 bg-zinc-950 z-10">
@@ -639,13 +641,18 @@ async function renderProfile(username) {
       <h2 class="font-bold text-lg">${esc(username)}</h2>
     </div>
     <div id="profile-header" class="p-4 border-b border-zinc-800 text-zinc-500 text-sm">Loading…</div>
-    <div id="profile-pulses"></div>
+    <div id="profile-tab-bar" class="flex border-b border-zinc-800 bg-zinc-950">
+      <button id="profile-tab-posts" onclick="switchProfileTab('posts', '${esc(username)}')"
+        class="flex-1 py-4 text-sm text-center transition-colors tab-active">Posts</button>
+      <button id="profile-tab-replies" onclick="switchProfileTab('replies', '${esc(username)}')"
+        class="flex-1 py-4 text-sm text-center transition-colors tab-inactive">Replies</button>
+      <button id="profile-tab-likes" onclick="switchProfileTab('likes', '${esc(username)}')"
+        class="flex-1 py-4 text-sm text-center transition-colors tab-inactive">Likes</button>
+    </div>
+    <div id="profile-content"></div>
   `;
 
-  const [profileData, pulsesData] = await Promise.all([
-    api(`/api/users/${encodeURIComponent(username)}`),
-    api(`/api/users/${encodeURIComponent(username)}/pulses`),
-  ]);
+  const profileData = await api(`/api/users/${encodeURIComponent(username)}`);
 
   const headerEl = document.getElementById('profile-header');
   if (profileData.error) {
@@ -684,13 +691,115 @@ async function renderProfile(username) {
     </div>
   `;
 
-  const pulsesEl = document.getElementById('profile-pulses');
-  const pulses = pulsesData.pulses || [];
-  if (!pulses.length) {
-    pulsesEl.innerHTML = '<p class="text-zinc-500 text-sm p-6 text-center">No pulses yet.</p>';
-  } else {
-    pulsesEl.innerHTML = pulses.map(p => `<div data-pulse-id="${p.id}">${renderPulseCard(p)}</div>`).join('');
+  loadProfilePosts(username, 0);
+}
+
+function switchProfileTab(tab, username) {
+  APP.profileTab = tab;
+  ['posts', 'replies', 'likes'].forEach(t => {
+    const el = document.getElementById('profile-tab-' + t);
+    if (el) el.className = `flex-1 py-4 text-sm text-center transition-colors ${tab === t ? 'tab-active' : 'tab-inactive'}`;
+  });
+  const content = document.getElementById('profile-content');
+  if (content) content.innerHTML = '';
+  if (tab === 'posts') loadProfilePosts(username, 0);
+  else if (tab === 'replies') loadProfileReplies(username, 0);
+  else if (tab === 'likes') loadProfileLikes(username, 0);
+}
+
+async function loadProfilePosts(username, offset) {
+  const content = document.getElementById('profile-content');
+  if (!content) return;
+  if (offset === 0) content.innerHTML = '<p class="text-zinc-500 text-sm p-6 text-center">Loading…</p>';
+  const data = await api(`/api/users/${encodeURIComponent(username)}/pulses?offset=${offset}`);
+  const pulses = data.pulses || [];
+  if (offset === 0) content.innerHTML = '';
+  if (!pulses.length && offset === 0) {
+    content.innerHTML = '<p class="text-zinc-500 text-sm p-6 text-center">No pulses yet.</p>';
+    return;
   }
+  pulses.forEach(p => {
+    const div = document.createElement('div');
+    div.dataset.pulseId = p.id;
+    div.innerHTML = renderPulseCard(p);
+    content.appendChild(div);
+  });
+  if (pulses.length === 20) {
+    const btn = document.createElement('div');
+    btn.className = 'p-4 text-center';
+    btn.innerHTML = `<button onclick="this.closest('div').remove(); loadProfilePosts('${esc(username)}', ${offset + 20});" class="text-violet-400 hover:text-violet-300 text-sm">Load more</button>`;
+    content.appendChild(btn);
+  }
+}
+
+async function loadProfileReplies(username, offset) {
+  const content = document.getElementById('profile-content');
+  if (!content) return;
+  if (offset === 0) content.innerHTML = '<p class="text-zinc-500 text-sm p-6 text-center">Loading…</p>';
+  const data = await api(`/api/users/${encodeURIComponent(username)}/comments?offset=${offset}`);
+  const comments = data.comments || [];
+  if (offset === 0) content.innerHTML = '';
+  if (!comments.length && offset === 0) {
+    content.innerHTML = '<p class="text-zinc-500 text-sm p-6 text-center">No replies yet.</p>';
+    return;
+  }
+  comments.forEach(c => {
+    const div = document.createElement('div');
+    div.innerHTML = renderCommentCard(c);
+    content.appendChild(div);
+  });
+  if (comments.length === 20) {
+    const btn = document.createElement('div');
+    btn.className = 'p-4 text-center';
+    btn.innerHTML = `<button onclick="this.closest('div').remove(); loadProfileReplies('${esc(username)}', ${offset + 20});" class="text-violet-400 hover:text-violet-300 text-sm">Load more</button>`;
+    content.appendChild(btn);
+  }
+}
+
+async function loadProfileLikes(username, offset) {
+  const content = document.getElementById('profile-content');
+  if (!content) return;
+  if (offset === 0) content.innerHTML = '<p class="text-zinc-500 text-sm p-6 text-center">Loading…</p>';
+  const data = await api(`/api/users/${encodeURIComponent(username)}/likes?offset=${offset}`);
+  const pulses = data.pulses || [];
+  if (offset === 0) content.innerHTML = '';
+  if (!pulses.length && offset === 0) {
+    content.innerHTML = "<p class=\"text-zinc-500 text-sm p-6 text-center\">Hasn't liked anything yet.</p>";
+    return;
+  }
+  pulses.forEach(p => {
+    const div = document.createElement('div');
+    div.dataset.pulseId = p.id;
+    div.innerHTML = renderPulseCard(p);
+    content.appendChild(div);
+  });
+  if (pulses.length === 20) {
+    const btn = document.createElement('div');
+    btn.className = 'p-4 text-center';
+    btn.innerHTML = `<button onclick="this.closest('div').remove(); loadProfileLikes('${esc(username)}', ${offset + 20});" class="text-violet-400 hover:text-violet-300 text-sm">Load more</button>`;
+    content.appendChild(btn);
+  }
+}
+
+function renderCommentCard(c) {
+  return `
+    <div class="px-4 py-3 border-b border-zinc-800 hover:bg-zinc-900/50 transition-colors cursor-pointer"
+         onclick="navigate('#pulse/${c.parent_id}')">
+      <div class="text-xs text-zinc-500 mb-2">
+        Replying to <a class="text-violet-400 hover:underline" href="#" onclick="event.preventDefault(); event.stopPropagation(); navigate('#profile/${esc(c.parent_username)}')">@${esc(c.parent_username)}</a>
+      </div>
+      <div class="flex gap-3">
+        <div class="avatar-sm shrink-0">${esc(initials(c.username))}</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="font-semibold text-sm text-zinc-100">${esc(c.username)}</span>
+            <span class="text-zinc-500 text-xs">${timeAgo(c.created_at)}</span>
+          </div>
+          <p class="text-sm text-zinc-100 leading-relaxed whitespace-pre-wrap break-words">${esc(c.content)}</p>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 async function handleFollow(username, currentlyFollowing) {
