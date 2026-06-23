@@ -46,10 +46,20 @@
       "path": "/#explore",
       "name": "Explore page renders",
       "expectSelector": "#explore-suggestions-list"
+    },
+    {
+      "path": "/",
+      "name": "Messages tab present",
+      "expectText": "Messages"
+    },
+    {
+      "path": "/#messages",
+      "name": "DM inbox renders",
+      "expectSelector": "#dm-inbox"
     }
   ],
   "visibility": {
-    "build": "private",
+    "build": "public",
     "view": "public"
   }
 }
