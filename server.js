@@ -474,6 +474,122 @@ app.get('/api/hashtags/:tag/pulses', async (req, res) => {
   }
 });
 
+// ── Direct Messages ───────────────────────────────────────────────────────────
+
+app.get('/api/messages', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { rows } = await pool.query(`
+      WITH latest AS (
+        SELECT DISTINCT ON (LEAST(sender_id, recipient_id), GREATEST(sender_id, recipient_id))
+          sender_id, sender_username, recipient_id, recipient_username,
+          content, created_at
+        FROM pulse_messages
+        WHERE sender_id = $1 OR recipient_id = $1
+        ORDER BY LEAST(sender_id, recipient_id), GREATEST(sender_id, recipient_id), created_at DESC
+      )
+      SELECT
+        CASE WHEN l.sender_id = $1 THEN l.recipient_id ELSE l.sender_id END AS partner_id,
+        CASE WHEN l.sender_id = $1 THEN l.recipient_username ELSE l.sender_username END AS partner_username,
+        SUBSTRING(l.content FROM 1 FOR 60) AS last_message,
+        l.created_at AS last_message_at,
+        l.sender_id AS last_sender_id,
+        (SELECT COUNT(*)::int FROM pulse_messages
+         WHERE recipient_id = $1
+           AND sender_id = (CASE WHEN l.sender_id = $1 THEN l.recipient_id ELSE l.sender_id END)
+           AND read_at IS NULL) AS unread_count
+      FROM latest l
+      ORDER BY l.created_at DESC
+    `, [userId]);
+    res.json({ conversations: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/messages/:username', async (req, res) => {
+  try {
+    const { username } = req.params;
+    const userId = req.user.id;
+    const mutualCheck = await pool.query(`
+      SELECT 1 FROM pulse_follows f1
+      WHERE f1.follower_id = $1 AND f1.following_username = $2
+        AND EXISTS (
+          SELECT 1 FROM pulse_follows f2
+          WHERE f2.follower_username = $2 AND f2.following_id = $1
+        )
+    `, [userId, username]);
+    if (!mutualCheck.rows.length) {
+      return res.json({ messages: [], partner_username: username, is_mutual: false });
+    }
+    const { rows } = await pool.query(`
+      SELECT id, sender_id, sender_username, recipient_id, recipient_username,
+             content, created_at, read_at
+      FROM pulse_messages
+      WHERE (sender_id = $1 AND recipient_username = $2)
+         OR (recipient_id = $1 AND sender_username = $2)
+      ORDER BY created_at ASC
+    `, [userId, username]);
+    res.json({ messages: rows, partner_username: username, is_mutual: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/messages/:username', async (req, res) => {
+  try {
+    const { username } = req.params;
+    const { content } = req.body;
+    const userId = req.user.id;
+    if (!content || content.trim().length === 0) {
+      return res.status(400).json({ error: 'Content is required' });
+    }
+    if (content.length > 280) {
+      return res.status(400).json({ error: 'Content exceeds 280 characters' });
+    }
+    const mutualCheck = await pool.query(`
+      SELECT 1 FROM pulse_follows f1
+      WHERE f1.follower_id = $1 AND f1.following_username = $2
+        AND EXISTS (
+          SELECT 1 FROM pulse_follows f2
+          WHERE f2.follower_username = $2 AND f2.following_id = $1
+        )
+    `, [userId, username]);
+    if (!mutualCheck.rows.length) {
+      return res.status(403).json({ error: 'Not mutually following' });
+    }
+    const recipientRes = await pool.query(
+      'SELECT user_id FROM pulses WHERE username = $1 LIMIT 1',
+      [username]
+    );
+    const recipientId = recipientRes.rows[0]?.user_id;
+    if (!recipientId) {
+      return res.status(404).json({ error: 'Recipient not found' });
+    }
+    const { rows } = await pool.query(`
+      INSERT INTO pulse_messages (sender_id, sender_username, recipient_id, recipient_username, content)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, sender_id, sender_username, recipient_id, recipient_username, content, created_at, read_at
+    `, [userId, req.user.username, recipientId, username, content.trim()]);
+    res.json({ message: rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/messages/:username/read', async (req, res) => {
+  try {
+    await pool.query(`
+      UPDATE pulse_messages
+      SET read_at = NOW()
+      WHERE recipient_id = $1 AND sender_username = $2 AND read_at IS NULL
+    `, [req.user.id, req.params.username]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Static & Shell ────────────────────────────────────────────────────────────
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
@@ -550,7 +666,20 @@ async function start() {
     );
     CREATE INDEX IF NOT EXISTS idx_pulse_hashtags_tag ON pulse_hashtags(tag);
     CREATE INDEX IF NOT EXISTS idx_pulse_hashtags_created_at ON pulse_hashtags(created_at);
+    CREATE TABLE IF NOT EXISTS pulse_messages (
+      id SERIAL PRIMARY KEY,
+      sender_id INTEGER NOT NULL,
+      sender_username VARCHAR(255) NOT NULL,
+      recipient_id INTEGER NOT NULL,
+      recipient_username VARCHAR(255) NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      read_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_pulse_messages_pair ON pulse_messages (LEAST(sender_id, recipient_id), GREATEST(sender_id, recipient_id), created_at);
+    CREATE INDEX IF NOT EXISTS idx_pulse_messages_recipient ON pulse_messages (recipient_id, read_at);
   `);
+  await pool.query(`COMMENT ON TABLE pulse_messages IS 'staging:private'`);
 
   if (IS_STAGING) {
     // Insert seed pulses (10 posts across 5 fake users)
@@ -695,6 +824,31 @@ async function start() {
         (9100015, 900017, 'defi',       NOW() - INTERVAL '7 hours'),
         (9100016, 900018, 'blockchain', NOW() - INTERVAL '8 hours'),
         (9100017, 900018, 'web3',       NOW() - INTERVAL '8 hours')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Messages (staging:private — empty in prod; seeded here so DM inbox has content)
+    // alice↔bob and alice↔carol are both mutual follows (see follows seed above)
+    await pool.query(`
+      INSERT INTO pulse_messages (id, sender_id, sender_username, recipient_id, recipient_username, content, created_at, read_at) VALUES
+        (8000001, 99990001, 'staging-pulse-alice', 99990002, 'staging-pulse-bob',
+         'Hey! Just noticed we can DM now',
+         NOW() - INTERVAL '3 hours', NOW() - INTERVAL '2 hours 55 minutes'),
+        (8000002, 99990002, 'staging-pulse-bob', 99990001, 'staging-pulse-alice',
+         'Nice, feels pretty seamless',
+         NOW() - INTERVAL '2 hours 45 minutes', NOW() - INTERVAL '2 hours 40 minutes'),
+        (8000003, 99990001, 'staging-pulse-alice', 99990002, 'staging-pulse-bob',
+         'Yeah, only works if you both follow each other',
+         NOW() - INTERVAL '2 hours 30 minutes', NOW() - INTERVAL '2 hours 25 minutes'),
+        (8000004, 99990002, 'staging-pulse-bob', 99990001, 'staging-pulse-alice',
+         'Makes sense — keeps it private',
+         NOW() - INTERVAL '2 hours', NOW() - INTERVAL '1 hour 55 minutes'),
+        (8000005, 99990003, 'staging-pulse-carol', 99990001, 'staging-pulse-alice',
+         'Welcome to the mutual DM club!',
+         NOW() - INTERVAL '1 hour', NULL),
+        (8000006, 99990001, 'staging-pulse-alice', 99990003, 'staging-pulse-carol',
+         'Haha thanks for the follow-back',
+         NOW() - INTERVAL '30 minutes', NOW() - INTERVAL '25 minutes')
       ON CONFLICT (id) DO NOTHING
     `);
   }
