@@ -780,6 +780,7 @@ async function start() {
   await pool.query(`COMMENT ON TABLE pulse_messages IS 'staging:private'`);
 
   if (IS_STAGING) {
+    try {
     // Insert seed pulses (10 posts across 5 fake users)
     await pool.query(`
       INSERT INTO pulses (id, user_id, username, usernode_pubkey, content, signature, created_at) VALUES
@@ -951,6 +952,9 @@ async function start() {
          NOW() - INTERVAL '30 minutes', NOW() - INTERVAL '25 minutes')
       ON CONFLICT (id) DO NOTHING
     `);
+    } catch (seedErr) {
+      console.error('Staging seed error (non-fatal):', seedErr.message);
+    }
   }
 }
 
