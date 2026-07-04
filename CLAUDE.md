@@ -227,6 +227,51 @@ No wallet dialog is shown for these actions.
 
 ---
 
+## Notifications & @mentions
+
+> Note: this file predates several shipped features (hashtags, search, DMs,
+> Explore, profile Replies/Likes tabs); treat the code as source of truth.
+> This section documents the notifications + mentions slice specifically.
+
+**Table `pulse_notifications`** (public; created idempotently in `start()`):
+`id`, `user_id` (recipient), `type` (`like`/`reply`/`follow`/`mention`),
+`actor_id`, `actor_username`, `pulse_id` (nullable; null for follows),
+`comment_id` (nullable), `created_at`, `read_at` (null = unread). Indexed on
+`(user_id, created_at DESC)` and `(user_id, read_at)`. No FKs — subject pulses
+are soft-deleted, so the read query LEFT JOINs `pulses` (`deleted_at IS NULL`)
+and filters out rows whose subject is gone.
+
+**Creation** is server-side and best-effort (fire-and-forget; never breaks the
+primary write). `createNotification(...)` inserts one row and no-ops when
+`recipientId === actorId` (no self-notifications). Hooks:
+- Like (`POST /api/pulses/:id/like`) → notify pulse owner, only when a new like
+  row was actually inserted (`rowCount > 0`).
+- Reply (`POST /api/pulses/:id/comments`) → notify pulse owner (type `reply`).
+- Follow (`POST /api/users/:username/follow`) → notify target, only on a new
+  follow row and when `targetId !== 0`.
+- Mentions — `extractMentions(content)` (sibling of `extractHashtags`, regex
+  `/@([a-zA-Z0-9_-]{1,255})/g`) runs on new pulses and comments;
+  `notifyMentions(...)` resolves each handle to a posting user and notifies it,
+  skipping self and the reply's pulse-owner (already pinged).
+
+**Routes** (all auth-required): `GET /api/notifications?offset=` (page 20,
+newest first, `{ notifications }`), `GET /api/notifications/unread_count`
+(`{ count }`), `POST /api/notifications/read` (marks all read).
+
+**Staging seed:** `GET /api/notifications` returns a request-time synthetic set
+(`stagingSyntheticNotifications()`) when `IS_STAGING` and the user has zero real
+rows — same pattern as the DM inbox. All synthetic rows are pre-read so the demo
+page populates without a stuck unread badge.
+
+**Frontend:** `#notifications` route → `renderNotifications()` /
+`loadNotifications()`; bell nav item + unread badge on desktop sidebar and
+mobile bottom nav (`nav-notifications` / `mob-nav-notifications`);
+`loadNotifUnreadCount()` mirrors `loadUnreadCount()`. `linkHashtags()` now also
+linkifies `@mentions` into violet profile links (applied to pulse cards and
+thread comments).
+
+---
+
 ## Auth middleware
 
 ```js

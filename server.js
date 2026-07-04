@@ -40,6 +40,60 @@ function extractHashtags(content) {
   return Array.from(tags);
 }
 
+// ── Mentions ────────────────────────────────────────────────────────────────────
+
+function extractMentions(content) {
+  const handles = new Set();
+  for (const m of content.matchAll(/@([a-zA-Z0-9_-]{1,255})/g)) {
+    handles.add(m[1].toLowerCase());
+  }
+  return Array.from(handles);
+}
+
+// ── Notifications ───────────────────────────────────────────────────────────────
+
+// Best-effort notification insert. Never notify yourself. Fire-and-forget:
+// a notification failure must never break the primary write.
+async function createNotification({ recipientId, actorId, actorUsername, type, pulseId, commentId }) {
+  if (!recipientId || recipientId === actorId) return;
+  try {
+    await pool.query(`
+      INSERT INTO pulse_notifications
+        (user_id, type, actor_id, actor_username, pulse_id, comment_id)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [recipientId, type, actorId, actorUsername, pulseId || null, commentId || null]);
+  } catch (err) {
+    console.error('createNotification error (non-fatal):', err.message);
+  }
+}
+
+// Resolve @mention handles to real posting users and notify each one.
+// `excludeUserId` skips a recipient already notified another way (e.g. the
+// reply's pulse owner) so they don't get a duplicate ping for one post.
+async function notifyMentions({ content, actorId, actorUsername, pulseId, commentId, excludeUserId }) {
+  try {
+    const handles = extractMentions(content);
+    if (!handles.length) return;
+    const notified = new Set();
+    if (excludeUserId) notified.add(excludeUserId);
+    notified.add(actorId);
+    for (const handle of handles) {
+      const { rows } = await pool.query(
+        'SELECT user_id FROM pulses WHERE lower(username) = $1 AND deleted_at IS NULL LIMIT 1',
+        [handle]
+      );
+      const recipientId = rows[0]?.user_id;
+      if (!recipientId || notified.has(recipientId)) continue;
+      notified.add(recipientId);
+      await createNotification({
+        recipientId, actorId, actorUsername, type: 'mention', pulseId, commentId,
+      });
+    }
+  } catch (err) {
+    console.error('notifyMentions error (non-fatal):', err.message);
+  }
+}
+
 // ── Feed ──────────────────────────────────────────────────────────────────────
 
 app.get('/api/feed/trending', async (req, res) => {
@@ -138,6 +192,14 @@ app.post('/api/pulses', async (req, res) => {
       const vals = tags.map((_, i) => `($1, $${i + 2})`).join(', ');
       pool.query(`INSERT INTO pulse_hashtags (pulse_id, tag) VALUES ${vals}`, [rows[0].id, ...tags]).catch(() => {});
     }
+    // Fire-and-forget: notify mentioned users (does not block the response)
+    notifyMentions({
+      content: content.trim(),
+      actorId: req.user.id,
+      actorUsername: req.user.username,
+      pulseId: rows[0].id,
+      commentId: null,
+    }).catch(() => {});
     res.json({ pulse: { ...rows[0], like_count: 0, comment_count: 0, liked_by_me: false } });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -184,13 +246,29 @@ app.delete('/api/pulses/:id', async (req, res) => {
 app.post('/api/pulses/:id/like', async (req, res) => {
   try {
     const { signature, sign_message, pubkey } = req.body;
-    await pool.query(`
+    const ins = await pool.query(`
       INSERT INTO pulse_likes (pulse_id, user_id, username, usernode_pubkey, signature, sign_message)
       VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (pulse_id, user_id) DO NOTHING
     `, [req.params.id, req.user.id, req.user.username,
         pubkey || req.user.usernode_pubkey || null,
         signature || null, sign_message || null]);
+    // Only notify on a genuinely new like (not a re-like), and never self-like
+    if (ins.rowCount > 0) {
+      const owner = await pool.query(
+        'SELECT user_id FROM pulses WHERE id = $1 AND deleted_at IS NULL',
+        [req.params.id]
+      );
+      if (owner.rows.length) {
+        createNotification({
+          recipientId: owner.rows[0].user_id,
+          actorId: req.user.id,
+          actorUsername: req.user.username,
+          type: 'like',
+          pulseId: parseInt(req.params.id) || null,
+        }).catch(() => {});
+      }
+    }
     const { rows } = await pool.query(
       'SELECT COUNT(*)::int AS like_count FROM pulse_likes WHERE pulse_id = $1',
       [req.params.id]
@@ -243,7 +321,7 @@ app.post('/api/pulses/:id/comments', async (req, res) => {
       return res.status(400).json({ error: 'Content exceeds 280 characters' });
     }
     const pulseCheck = await pool.query(
-      'SELECT id FROM pulses WHERE id = $1 AND deleted_at IS NULL',
+      'SELECT id, user_id FROM pulses WHERE id = $1 AND deleted_at IS NULL',
       [req.params.id]
     );
     if (!pulseCheck.rows.length) return res.status(404).json({ error: 'Pulse not found' });
@@ -255,6 +333,25 @@ app.post('/api/pulses/:id/comments', async (req, res) => {
     `, [req.params.id, req.user.id, req.user.username,
         pubkey || req.user.usernode_pubkey || null,
         content.trim(), signature || null, sign_message || null]);
+    const ownerId = pulseCheck.rows[0].user_id;
+    // Notify the pulse owner of the reply (skips self inside createNotification)
+    createNotification({
+      recipientId: ownerId,
+      actorId: req.user.id,
+      actorUsername: req.user.username,
+      type: 'reply',
+      pulseId: parseInt(req.params.id) || null,
+      commentId: rows[0].id,
+    }).catch(() => {});
+    // Notify any @mentioned users, skipping the owner (already pinged as reply)
+    notifyMentions({
+      content: content.trim(),
+      actorId: req.user.id,
+      actorUsername: req.user.username,
+      pulseId: parseInt(req.params.id) || null,
+      commentId: rows[0].id,
+      excludeUserId: ownerId,
+    }).catch(() => {});
     res.json({ comment: rows[0] });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -387,11 +484,21 @@ app.post('/api/users/:username/follow', async (req, res) => {
       [username]
     );
     const targetId = targetRes.rows[0]?.user_id || 0;
-    await pool.query(`
+    const ins = await pool.query(`
       INSERT INTO pulse_follows (follower_id, follower_username, following_id, following_username)
       VALUES ($1, $2, $3, $4)
       ON CONFLICT (follower_id, following_id) DO NOTHING
     `, [req.user.id, req.user.username, targetId, username]);
+    // Notify the followed user on a genuinely new follow. Skip the known
+    // "never posted" edge case (targetId === 0) — there's no real user to notify.
+    if (ins.rowCount > 0 && targetId) {
+      createNotification({
+        recipientId: targetId,
+        actorId: req.user.id,
+        actorUsername: req.user.username,
+        type: 'follow',
+      }).catch(() => {});
+    }
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -688,6 +795,79 @@ app.post('/api/messages/:username/read', async (req, res) => {
   }
 });
 
+// ── Notifications ───────────────────────────────────────────────────────────────
+
+// Synthetic staging notifications, built at request time when the real table
+// is empty for this user (mirrors the DM inbox demo-injection pattern). All are
+// marked read so the demo page is populated without leaving a stuck unread badge.
+function stagingSyntheticNotifications() {
+  const now = Date.now();
+  const read = (mins) => new Date(now - (mins - 2) * 60 * 1000).toISOString();
+  const at = (mins) => new Date(now - mins * 60 * 1000).toISOString();
+  return [
+    { id: 8100001, type: 'like', actor_id: 99990002, actor_username: 'staging-pulse-bob',
+      pulse_id: 900001, snippet: 'Usernode just hit a new milestone! The community keeps growing.',
+      created_at: at(20), read_at: read(20) },
+    { id: 8100002, type: 'reply', actor_id: 99990003, actor_username: 'staging-pulse-carol',
+      pulse_id: 900003, snippet: 'Anyone else excited about the Pulse launch? This is how social should work.',
+      created_at: at(45), read_at: read(45) },
+    { id: 8100003, type: 'follow', actor_id: 99990004, actor_username: 'staging-pulse-dave',
+      pulse_id: null, snippet: null,
+      created_at: at(120), read_at: read(120) },
+    { id: 8100004, type: 'mention', actor_id: 99990005, actor_username: 'staging-pulse-eve',
+      pulse_id: 900008, snippet: 'The vibe on here is just different. Healthy discourse.',
+      created_at: at(200), read_at: read(200) },
+  ];
+}
+
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const offset = parseInt(req.query.offset) || 0;
+    const userId = req.user.id;
+    const { rows } = await pool.query(`
+      SELECT n.id, n.type, n.actor_id, n.actor_username, n.pulse_id,
+             n.created_at, n.read_at,
+             SUBSTRING(p.content FROM 1 FOR 100) AS snippet
+      FROM pulse_notifications n
+      LEFT JOIN pulses p ON p.id = n.pulse_id AND p.deleted_at IS NULL
+      WHERE n.user_id = $1
+        AND (n.type = 'follow' OR n.pulse_id IS NULL OR p.id IS NOT NULL)
+      ORDER BY n.created_at DESC
+      LIMIT 20 OFFSET $2
+    `, [userId, offset]);
+    if (IS_STAGING && rows.length === 0 && offset === 0) {
+      return res.json({ notifications: stagingSyntheticNotifications() });
+    }
+    res.json({ notifications: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/notifications/unread_count', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT COUNT(*)::int AS count FROM pulse_notifications WHERE user_id = $1 AND read_at IS NULL',
+      [req.user.id]
+    );
+    res.json({ count: rows[0].count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/notifications/read', async (req, res) => {
+  try {
+    await pool.query(
+      'UPDATE pulse_notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL',
+      [req.user.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Static & Shell ────────────────────────────────────────────────────────────
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
@@ -776,6 +956,19 @@ async function start() {
     );
     CREATE INDEX IF NOT EXISTS idx_pulse_messages_pair ON pulse_messages (LEAST(sender_id, recipient_id), GREATEST(sender_id, recipient_id), created_at);
     CREATE INDEX IF NOT EXISTS idx_pulse_messages_recipient ON pulse_messages (recipient_id, read_at);
+    CREATE TABLE IF NOT EXISTS pulse_notifications (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      type VARCHAR(20) NOT NULL,
+      actor_id INTEGER NOT NULL,
+      actor_username VARCHAR(255) NOT NULL,
+      pulse_id INTEGER,
+      comment_id INTEGER,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      read_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_pulse_notifications_user ON pulse_notifications (user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pulse_notifications_unread ON pulse_notifications (user_id, read_at);
   `);
   await pool.query(`COMMENT ON TABLE pulse_messages IS 'staging:private'`);
 

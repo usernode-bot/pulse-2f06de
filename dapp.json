@@ -76,6 +76,16 @@
       "path": "/#profile/staging-pulse-alice",
       "name": "Profile Likes tab present",
       "expectText": "Likes"
+    },
+    {
+      "path": "/",
+      "name": "Notifications nav present",
+      "expectSelector": "#nav-notifications"
+    },
+    {
+      "path": "/#notifications",
+      "name": "Notifications page renders",
+      "expectSelector": "#notif-list"
     }
   ],
   "visibility": {
