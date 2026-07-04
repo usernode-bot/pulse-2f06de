@@ -59,7 +59,7 @@
     }
   ],
   "visibility": {
-    "build": "public",
+    "build": "private",
     "view": "public"
   }
 }
