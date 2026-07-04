@@ -333,6 +333,48 @@ app.get('/api/users/:username/pulses', async (req, res) => {
   }
 });
 
+app.get('/api/users/:username/comments', async (req, res) => {
+  try {
+    const offset = parseInt(req.query.offset) || 0;
+    const { rows } = await pool.query(`
+      SELECT c.id, c.pulse_id AS parent_id, c.user_id, c.username, c.content, c.created_at,
+             p.username AS parent_username, p.content AS parent_content
+      FROM pulse_comments c
+      JOIN pulses p ON p.id = c.pulse_id AND p.deleted_at IS NULL
+      WHERE c.username = $1
+      ORDER BY c.created_at DESC
+      LIMIT 20 OFFSET $2
+    `, [req.params.username, offset]);
+    res.json({ comments: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/users/:username/likes', async (req, res) => {
+  try {
+    const offset = parseInt(req.query.offset) || 0;
+    const { rows } = await pool.query(`
+      SELECT p.id, p.user_id, p.username, p.usernode_pubkey, p.content,
+             p.signature, p.sign_message, p.created_at,
+             COUNT(DISTINCT l2.id)::int AS like_count,
+             COUNT(DISTINCT c.id)::int AS comment_count,
+             true AS liked_by_me
+      FROM pulse_likes l
+      JOIN pulses p ON p.id = l.pulse_id AND p.deleted_at IS NULL
+      LEFT JOIN pulse_likes l2 ON l2.pulse_id = p.id
+      LEFT JOIN pulse_comments c ON c.pulse_id = p.id
+      WHERE l.username = $1
+      GROUP BY p.id, l.created_at
+      ORDER BY l.created_at DESC
+      LIMIT 20 OFFSET $2
+    `, [req.params.username, offset]);
+    res.json({ pulses: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/users/:username/follow', async (req, res) => {
   try {
     const { username } = req.params;
@@ -738,6 +780,7 @@ async function start() {
   await pool.query(`COMMENT ON TABLE pulse_messages IS 'staging:private'`);
 
   if (IS_STAGING) {
+    try {
     // Insert seed pulses (10 posts across 5 fake users)
     await pool.query(`
       INSERT INTO pulses (id, user_id, username, usernode_pubkey, content, signature, created_at) VALUES
@@ -843,7 +886,9 @@ async function start() {
         (9000002, 900003, 99990001, 'staging-pulse-alice', 'ut1staging000alice', 'Same here! Pulse is going to change everything.'),
         (9000003, 900005, 99990004, 'staging-pulse-dave', 'ut1staging000dave', 'Wise words. Backed up my seed phrase again after reading this.'),
         (9000004, 900007, 99990003, 'staging-pulse-carol', 'ut1staging000carol', 'Following this thread closely!'),
-        (9000005, 900009, 99990004, 'staging-pulse-dave', 'ut1staging000dave', 'I''ll be there! Who else?')
+        (9000005, 900009, 99990004, 'staging-pulse-dave', 'ut1staging000dave', 'I''ll be there! Who else?'),
+        (9000006, 900002, 99990005, 'staging-pulse-eve', 'ut1staging000eve', 'This is the future of social!'),
+        (9000007, 900004, 99990005, 'staging-pulse-eve', 'ut1staging000eve', 'Big agree — decentralisation matters.')
       ON CONFLICT (id) DO NOTHING
     `);
 
@@ -907,6 +952,9 @@ async function start() {
          NOW() - INTERVAL '30 minutes', NOW() - INTERVAL '25 minutes')
       ON CONFLICT (id) DO NOTHING
     `);
+    } catch (seedErr) {
+      console.error('Staging seed error (non-fatal):', seedErr.message);
+    }
   }
 }
 

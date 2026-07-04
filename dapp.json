@@ -56,6 +56,26 @@
       "path": "/#messages",
       "name": "DM inbox renders",
       "expectSelector": "#dm-inbox"
+    },
+    {
+      "path": "/#profile/staging-pulse-alice",
+      "name": "Profile tab bar present",
+      "expectSelector": "#profile-tab-bar"
+    },
+    {
+      "path": "/#profile/staging-pulse-alice",
+      "name": "Profile Posts tab present",
+      "expectText": "Posts"
+    },
+    {
+      "path": "/#profile/staging-pulse-alice",
+      "name": "Profile Replies tab present",
+      "expectText": "Replies"
+    },
+    {
+      "path": "/#profile/staging-pulse-alice",
+      "name": "Profile Likes tab present",
+      "expectText": "Likes"
     }
   ],
   "visibility": {
