@@ -258,10 +258,16 @@ primary write). `createNotification(...)` inserts one row and no-ops when
 newest first, `{ notifications }`), `GET /api/notifications/unread_count`
 (`{ count }`), `POST /api/notifications/read` (marks all read).
 
-**Staging seed:** `GET /api/notifications` returns a request-time synthetic set
-(`stagingSyntheticNotifications()`) when `IS_STAGING` and the user has zero real
-rows — same pattern as the DM inbox. All synthetic rows are pre-read so the demo
-page populates without a stuck unread badge.
+**Staging seed:** `ensureStagingNotificationSeed(userId)` runs at the top of
+both `GET /api/notifications` and `GET /api/notifications/unread_count`. The
+first time a given `userId` has zero rows in `pulse_notifications` and
+`IS_STAGING` is set, it inserts four real, **unread** rows for that user (one
+each of `like`/`reply`/`follow`/`mention`, from the existing fake staging
+actors and seed pulses 900001/900003/900008) — idempotent via an existence
+check. Unlike the DM inbox's request-time-only synthetic conversations, these
+rows are persisted, so the list and the unread count share one source of
+truth: the badge is genuinely nonzero on first load and genuinely clears via
+the real `POST /api/notifications/read` update once the tester opens the page.
 
 **Frontend:** `#notifications` route → `renderNotifications()` /
 `loadNotifications()`; bell nav item + unread badge on desktop sidebar and

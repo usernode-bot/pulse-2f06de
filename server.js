@@ -797,33 +797,46 @@ app.post('/api/messages/:username/read', async (req, res) => {
 
 // ── Notifications ───────────────────────────────────────────────────────────────
 
-// Synthetic staging notifications, built at request time when the real table
-// is empty for this user (mirrors the DM inbox demo-injection pattern). All are
-// marked read so the demo page is populated without leaving a stuck unread badge.
-function stagingSyntheticNotifications() {
-  const now = Date.now();
-  const read = (mins) => new Date(now - (mins - 2) * 60 * 1000).toISOString();
-  const at = (mins) => new Date(now - mins * 60 * 1000).toISOString();
-  return [
-    { id: 8100001, type: 'like', actor_id: 99990002, actor_username: 'staging-pulse-bob',
-      pulse_id: 900001, snippet: 'Usernode just hit a new milestone! The community keeps growing.',
-      created_at: at(20), read_at: read(20) },
-    { id: 8100002, type: 'reply', actor_id: 99990003, actor_username: 'staging-pulse-carol',
-      pulse_id: 900003, snippet: 'Anyone else excited about the Pulse launch? This is how social should work.',
-      created_at: at(45), read_at: read(45) },
-    { id: 8100003, type: 'follow', actor_id: 99990004, actor_username: 'staging-pulse-dave',
-      pulse_id: null, snippet: null,
-      created_at: at(120), read_at: read(120) },
-    { id: 8100004, type: 'mention', actor_id: 99990005, actor_username: 'staging-pulse-eve',
-      pulse_id: 900008, snippet: 'The vibe on here is just different. Healthy discourse.',
-      created_at: at(200), read_at: read(200) },
-  ];
+// One-time, per-recipient staging seed. The old approach returned synthetic,
+// pre-read, never-persisted JSON from GET /api/notifications whenever the real
+// table was empty -- but /unread_count only ever queries the real table, so the
+// badge could never show anything but 0 no matter what the list displayed. Fix:
+// the first time a real staging tester hits either notifications route, insert
+// real (unread) rows for THAT user_id using the existing fake staging actors and
+// seed pulses. Now the list and the count share one source of truth, and marking
+// read via the existing POST /read route genuinely clears the badge.
+async function ensureStagingNotificationSeed(userId) {
+  if (!IS_STAGING) return;
+  try {
+    const existing = await pool.query(
+      'SELECT 1 FROM pulse_notifications WHERE user_id = $1 LIMIT 1',
+      [userId]
+    );
+    if (existing.rows.length) return;
+    const now = Date.now();
+    const seed = [
+      { type: 'like', actorId: 99990002, actorUsername: 'staging-pulse-bob', pulseId: 900001, minsAgo: 20 },
+      { type: 'reply', actorId: 99990003, actorUsername: 'staging-pulse-carol', pulseId: 900003, minsAgo: 45 },
+      { type: 'follow', actorId: 99990004, actorUsername: 'staging-pulse-dave', pulseId: null, minsAgo: 120 },
+      { type: 'mention', actorId: 99990005, actorUsername: 'staging-pulse-eve', pulseId: 900008, minsAgo: 200 },
+    ];
+    for (const n of seed) {
+      const createdAt = new Date(now - n.minsAgo * 60 * 1000);
+      await pool.query(`
+        INSERT INTO pulse_notifications (user_id, type, actor_id, actor_username, pulse_id, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [userId, n.type, n.actorId, n.actorUsername, n.pulseId, createdAt]);
+    }
+  } catch (err) {
+    console.error('ensureStagingNotificationSeed error (non-fatal):', err.message);
+  }
 }
 
 app.get('/api/notifications', async (req, res) => {
   try {
     const offset = parseInt(req.query.offset) || 0;
     const userId = req.user.id;
+    await ensureStagingNotificationSeed(userId);
     const { rows } = await pool.query(`
       SELECT n.id, n.type, n.actor_id, n.actor_username, n.pulse_id,
              n.created_at, n.read_at,
@@ -835,9 +848,6 @@ app.get('/api/notifications', async (req, res) => {
       ORDER BY n.created_at DESC
       LIMIT 20 OFFSET $2
     `, [userId, offset]);
-    if (IS_STAGING && rows.length === 0 && offset === 0) {
-      return res.json({ notifications: stagingSyntheticNotifications() });
-    }
     res.json({ notifications: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -846,7 +856,8 @@ app.get('/api/notifications', async (req, res) => {
 
 app.get('/api/notifications/unread_count', async (req, res) => {
   try {
-    // Mirror the same "subject still visible" filter as the list query below,
+    await ensureStagingNotificationSeed(req.user.id);
+    // Mirror the same "subject still visible" filter as the list query above,
     // so the badge count never includes rows that could never actually be
     // seen (e.g. a like/reply/mention on a pulse that's since been soft-deleted).
     const { rows } = await pool.query(`
