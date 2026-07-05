@@ -846,10 +846,17 @@ app.get('/api/notifications', async (req, res) => {
 
 app.get('/api/notifications/unread_count', async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      'SELECT COUNT(*)::int AS count FROM pulse_notifications WHERE user_id = $1 AND read_at IS NULL',
-      [req.user.id]
-    );
+    // Mirror the same "subject still visible" filter as the list query below,
+    // so the badge count never includes rows that could never actually be
+    // seen (e.g. a like/reply/mention on a pulse that's since been soft-deleted).
+    const { rows } = await pool.query(`
+      SELECT COUNT(*)::int AS count
+      FROM pulse_notifications n
+      LEFT JOIN pulses p ON p.id = n.pulse_id AND p.deleted_at IS NULL
+      WHERE n.user_id = $1
+        AND n.read_at IS NULL
+        AND (n.type = 'follow' OR n.pulse_id IS NULL OR p.id IS NOT NULL)
+    `, [req.user.id]);
     res.json({ count: rows[0].count });
   } catch (err) {
     res.status(500).json({ error: err.message });
