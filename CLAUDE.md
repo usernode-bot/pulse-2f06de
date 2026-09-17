@@ -24,7 +24,7 @@ PostgreSQL is the primary read store.
 | Database | PostgreSQL via `pg` `Pool`; schema applied idempotently on boot |
 | Auth | JWT (`jsonwebtoken`); injected by the Usernode platform iframe |
 | Frontend | Single file `public/index.html`; Tailwind CSS via CDN; vanilla JS inline in `<script>` |
-| Wallet bridge | `window.usernode` from `https://social-vibecoding.usernodelabs.org/usernode-bridge/v1/bridge.js` |
+| Wallet bridge | `window.usernode` from `/usernode-bridge/v1/bridge.js` |
 | Entry point | `npm start` → `node server.js`, port from `$PORT` (default 3000) |
 
 No build step. No bundler. No client-side framework.
