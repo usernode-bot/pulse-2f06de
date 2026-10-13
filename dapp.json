@@ -87,6 +87,16 @@
       "path": "/#notifications",
       "name": "Notifications page renders",
       "expectSelector": "#notif-list"
+    },
+    {
+      "path": "/#notifications",
+      "name": "Notification settings render",
+      "expectSelector": "#notif-settings"
+    },
+    {
+      "path": "/#notifications",
+      "name": "Notification settings title present",
+      "expectText": "Notification settings"
     }
   ],
   "visibility": {
