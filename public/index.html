@@ -569,8 +569,18 @@ async function loadFeedPulses(offset = 0) {
     : APP.currentTab === 'live'
     ? `/api/feed/live?offset=${offset}`
     : `/api/feed/following?offset=${offset}`;
-  const data = await api(url);
-  const pulses = data.pulses || [];
+  let data;
+  try {
+    data = await api(url);
+  } catch (e) {
+    showFeedLoadError(offset);
+    return;
+  }
+  if (!data || data.error || !Array.isArray(data.pulses)) {
+    showFeedLoadError(offset);
+    return;
+  }
+  const pulses = data.pulses;
 
   if (offset === 0) {
     if (!pulses.length) {
@@ -604,6 +614,31 @@ async function loadMoreFeed(offset) {
   const lm = document.getElementById('load-more');
   if (lm) lm.remove();
   await loadFeedPulses(offset);
+}
+
+// The feed failed to load: show a message and a Try again button instead of
+// the empty-feed message (or spinning forever). Try again refetches in place,
+// preserving the tab and offset.
+function showFeedLoadError(offset) {
+  const container = document.getElementById('feed-pulses');
+  if (!container) return;
+  if (offset === 0) {
+    container.innerHTML = `
+      <div class="p-8 text-center">
+        <p class="text-zinc-400 mb-2 font-medium">Couldn't load pulses</p>
+        <button class="px-4 py-2 rounded-full bg-zinc-800 hover:bg-zinc-700 text-sm font-medium transition-colors" onclick="loadFeedPulses(0)">Try again</button>
+      </div>`;
+  } else {
+    // Pagination failed on top of an already-loaded feed: keep the loaded
+    // pulses and offer Try again for just the next page.
+    const lm = document.getElementById('load-more');
+    if (lm) lm.remove();
+    container.insertAdjacentHTML('beforeend', `
+      <div class="p-6 text-center">
+        <p class="text-zinc-500 text-sm mb-2">Couldn't load more pulses</p>
+        <button class="px-4 py-2 rounded-full bg-zinc-800 hover:bg-zinc-700 text-sm font-medium transition-colors" onclick="loadFeedPulses(${offset})">Try again</button>
+      </div>`);
+  }
 }
 
 // ── Thread view ───────────────────────────────────────────────────────────────
@@ -1422,13 +1457,33 @@ const NOTIF_TYPES = [
 ];
 
 async function loadNotifSettings() {
-  let settings = { like: true, reply: true, follow: true, mention: true };
+  const el = document.getElementById('notif-settings');
+  if (!el) return;
+  let data;
   try {
-    const data = await api('/api/notifications/settings');
-    if (data.settings) settings = data.settings;
-  } catch (e) {}
-  // On failure we render all-on, which is the server's default anyway.
-  renderNotifSettings(settings);
+    data = await api('/api/notifications/settings');
+  } catch (e) {
+    showNotifSettingsError();
+    return;
+  }
+  if (!data || data.error || !data.settings) {
+    showNotifSettingsError();
+    return;
+  }
+  renderNotifSettings(data.settings);
+}
+
+// The settings fetch failed: say so and offer Try again, rather than silently
+// rendering every switch as on (which would misstate the user's real prefs).
+function showNotifSettingsError() {
+  const el = document.getElementById('notif-settings');
+  if (!el) return;
+  el.innerHTML = `
+    <h3 class="font-bold text-[15px] text-zinc-100">Notification settings</h3>
+    <div class="py-4 text-center">
+      <p class="text-zinc-400 text-sm mb-2">Couldn't load notification settings</p>
+      <button class="px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-xs font-medium transition-colors" onclick="loadNotifSettings()">Try again</button>
+    </div>`;
 }
 
 function renderNotifSettings(settings) {
