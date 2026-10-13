@@ -276,6 +276,55 @@ mobile bottom nav (`nav-notifications` / `mob-nav-notifications`);
 linkifies `@mentions` into violet profile links (applied to pulse cards and
 thread comments).
 
+### Per-type notification settings
+
+**Table `pulse_notification_prefs`** (public; append-only): `id`, `user_id`,
+`type` (`like`/`reply`/`follow`/`mention`), `enabled` (BOOLEAN), `created_at`.
+Each toggle appends a row; the **latest row per `(user_id, type)` wins**, and a
+missing row means enabled (the default for everyone). Indexed on
+`(user_id, type, id DESC)`.
+
+`getNotifSettings(userId)` resolves the effective settings (`DISTINCT ON
+(type) … ORDER BY type, id DESC`, merged over all-true defaults). Both
+`createNotification(...)` and `notifyMentions(...)` check the recipient's
+setting for the type first: a disabled type never creates a notification (so
+it never shows in the list, never counts towards the badge, and is never
+recorded as an event). Existing notifications are untouched; activity that
+happens while a type is off is never stored or replayed.
+
+**Routes** (auth-required): `GET /api/notifications/settings` → `{ settings }`;
+`POST /api/notifications/settings` body `{ type, enabled }` (400 unless `type`
+is one of the four types and `enabled` is a boolean) → `{ settings }`.
+
+**Frontend:** "Notification settings" section at the top of the Notifications
+screen (`#notif-settings`): one `.notif-switch` per type, saves immediately on
+tap, flips back with an error toast "Couldn't save setting" if the save fails.
+
+### Notification event outbox (for Homeroom)
+
+Every notification that passes the recipient's settings is also written to
+**`pulse_notification_events`** in the same SQL statement as the notification
+row (CTE insert — both appear or neither does). Append-only outbox; a future
+reader polls with `WHERE id > $lastSeen ORDER BY id`. Columns: `schema`
+(DEFAULT `'pulse.notification.v1'`), `app` (DEFAULT `'pulse'`),
+`notification_id`, `type`, `actor_id`, `actor_username`, `recipient_id`,
+`recipient_username`, `pulse_id` (null for follows), `comment_id`,
+`created_at`. The event envelope is the row as JSON:
+
+```json
+{ "schema": "pulse.notification.v1", "app": "pulse", "id": 42,
+  "notification_id": 317, "type": "like",
+  "actor_id": 123, "actor_username": "bob",
+  "recipient_id": 456, "recipient_username": "alice",
+  "pulse_id": 900001, "comment_id": null,
+  "created_at": "2026-10-13T12:00:00Z" }
+```
+
+Homeroom has no event format yet; Pulse defines this one and will adapt it
+when Homeroom publishes one. The staging seed inserts demo events with fixed
+ids (900001–900003) and `notification_id NULL` — they are demo data, not real
+activity, and `ensureStagingNotificationSeed` still writes no events.
+
 ---
 
 ## Auth middleware

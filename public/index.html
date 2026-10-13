@@ -88,6 +88,11 @@
     .mob-nav-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; flex: 1; padding: 8px 0; color: #71717a; transition: color 0.15s; cursor: pointer; border: none; background: none; }
     .mob-nav-btn:hover, .mob-nav-btn.active { color: #7c3aed; }
     #toast { transition: opacity 0.3s ease; }
+    .notif-switch { width: 40px; height: 22px; border-radius: 9999px; background: #3f3f46; position: relative; flex-shrink: 0; border: none; cursor: pointer; transition: background-color 0.15s; padding: 0; }
+    .notif-switch.on { background: #7c3aed; }
+    .notif-switch:disabled { opacity: 0.6; cursor: default; }
+    .notif-switch span { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left 0.15s; }
+    .notif-switch.on span { left: 21px; }
   </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100">
@@ -564,8 +569,18 @@ async function loadFeedPulses(offset = 0) {
     : APP.currentTab === 'live'
     ? `/api/feed/live?offset=${offset}`
     : `/api/feed/following?offset=${offset}`;
-  const data = await api(url);
-  const pulses = data.pulses || [];
+  let data;
+  try {
+    data = await api(url);
+  } catch (e) {
+    showFeedLoadError(offset);
+    return;
+  }
+  if (!data || data.error || !Array.isArray(data.pulses)) {
+    showFeedLoadError(offset);
+    return;
+  }
+  const pulses = data.pulses;
 
   if (offset === 0) {
     if (!pulses.length) {
@@ -599,6 +614,31 @@ async function loadMoreFeed(offset) {
   const lm = document.getElementById('load-more');
   if (lm) lm.remove();
   await loadFeedPulses(offset);
+}
+
+// The feed failed to load: show a message and a Try again button instead of
+// the empty-feed message (or spinning forever). Try again refetches in place,
+// preserving the tab and offset.
+function showFeedLoadError(offset) {
+  const container = document.getElementById('feed-pulses');
+  if (!container) return;
+  if (offset === 0) {
+    container.innerHTML = `
+      <div class="p-8 text-center">
+        <p class="text-zinc-400 mb-2 font-medium">Couldn't load pulses</p>
+        <button class="px-4 py-2 rounded-full bg-zinc-800 hover:bg-zinc-700 text-sm font-medium transition-colors" onclick="loadFeedPulses(0)">Try again</button>
+      </div>`;
+  } else {
+    // Pagination failed on top of an already-loaded feed: keep the loaded
+    // pulses and offer Try again for just the next page.
+    const lm = document.getElementById('load-more');
+    if (lm) lm.remove();
+    container.insertAdjacentHTML('beforeend', `
+      <div class="p-6 text-center">
+        <p class="text-zinc-500 text-sm mb-2">Couldn't load more pulses</p>
+        <button class="px-4 py-2 rounded-full bg-zinc-800 hover:bg-zinc-700 text-sm font-medium transition-colors" onclick="loadFeedPulses(${offset})">Try again</button>
+      </div>`);
+  }
 }
 
 // ── Thread view ───────────────────────────────────────────────────────────────
@@ -1321,10 +1361,14 @@ function renderNotifications() {
     <div class="sticky top-14 lg:top-0 bg-zinc-950/90 backdrop-blur-sm z-10 border-b border-zinc-800 px-4 py-3">
       <h2 class="font-bold text-xl">Notifications</h2>
     </div>
+    <div id="notif-settings" class="border-b border-zinc-800 px-4 pt-3 pb-1">
+      <div class="flex items-center justify-center h-16 text-zinc-500 text-sm">Loading…</div>
+    </div>
     <div id="notif-list">
       <div class="flex items-center justify-center h-24 text-zinc-500 text-sm">Loading…</div>
     </div>
   `;
+  loadNotifSettings();
   loadNotifications(0);
   // Opening the page marks everything read and clears the badge.
   api('/api/notifications/read', { method: 'POST' })
@@ -1402,6 +1446,91 @@ async function loadNotifUnreadCount() {
       b.style.display = text ? 'inline-flex' : 'none';
     });
   } catch (e) {}
+}
+
+// ── Notification settings ─────────────────────────────────────────────────────
+const NOTIF_TYPES = [
+  { type: 'like',    label: 'Likes',    desc: 'When someone likes your pulse' },
+  { type: 'reply',   label: 'Replies',  desc: 'When someone replies to your pulse' },
+  { type: 'follow',  label: 'Follows',  desc: 'When someone follows you' },
+  { type: 'mention', label: 'Mentions', desc: 'When someone mentions you' },
+];
+
+async function loadNotifSettings() {
+  const el = document.getElementById('notif-settings');
+  if (!el) return;
+  let data;
+  try {
+    data = await api('/api/notifications/settings');
+  } catch (e) {
+    showNotifSettingsError();
+    return;
+  }
+  if (!data || data.error || !data.settings) {
+    showNotifSettingsError();
+    return;
+  }
+  renderNotifSettings(data.settings);
+}
+
+// The settings fetch failed: say so and offer Try again, rather than silently
+// rendering every switch as on (which would misstate the user's real prefs).
+function showNotifSettingsError() {
+  const el = document.getElementById('notif-settings');
+  if (!el) return;
+  el.innerHTML = `
+    <h3 class="font-bold text-[15px] text-zinc-100">Notification settings</h3>
+    <div class="py-4 text-center">
+      <p class="text-zinc-400 text-sm mb-2">Couldn't load notification settings</p>
+      <button class="px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-xs font-medium transition-colors" onclick="loadNotifSettings()">Try again</button>
+    </div>`;
+}
+
+function renderNotifSettings(settings) {
+  const el = document.getElementById('notif-settings');
+  if (!el) return;
+  const rows = NOTIF_TYPES.map(t => {
+    const on = settings[t.type] !== false;
+    return `
+      <div class="flex items-center justify-between py-2">
+        <div>
+          <p class="text-sm font-medium text-zinc-100">${t.label}</p>
+          <p class="text-xs text-zinc-500">${t.desc}</p>
+        </div>
+        <button role="switch" aria-checked="${on}" class="notif-switch ${on ? 'on' : ''}" data-type="${t.type}"
+          onclick="toggleNotifSetting('${t.type}')"><span></span></button>
+      </div>
+    `;
+  }).join('');
+  el.innerHTML = `
+    <h3 class="font-bold text-[15px] text-zinc-100">Notification settings</h3>
+    <p class="text-[13px] text-zinc-500 mt-0.5 mb-1.5">Choose what Pulse notifies you about.</p>
+    ${rows}
+  `;
+}
+
+async function toggleNotifSetting(type) {
+  const btn = document.querySelector(`#notif-settings .notif-switch[data-type="${type}"]`);
+  if (!btn || btn.disabled) return;
+  const prevOn = btn.classList.contains('on');
+  const nextOn = !prevOn;
+  btn.disabled = true;
+  btn.classList.toggle('on', nextOn);
+  btn.setAttribute('aria-checked', String(nextOn));
+  try {
+    const data = await api('/api/notifications/settings', {
+      method: 'POST',
+      body: { type, enabled: nextOn },
+    });
+    if (data.error) throw new Error(data.error);
+  } catch (e) {
+    // Save failed: flip the switch back and say so.
+    btn.classList.toggle('on', prevOn);
+    btn.setAttribute('aria-checked', String(prevOn));
+    showToast("Couldn't save setting", true);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────

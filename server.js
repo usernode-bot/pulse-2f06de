@@ -64,16 +64,56 @@ function extractMentions(content) {
 
 // ── Notifications ───────────────────────────────────────────────────────────────
 
+const NOTIF_TYPES = ['like', 'reply', 'follow', 'mention'];
+
+// Per-user, per-type notification settings. `pulse_notification_prefs` is
+// append-only: the latest row per (user_id, type) wins, and a missing row
+// means the type is enabled (the default for everyone).
+async function getNotifSettings(userId) {
+  const settings = { like: true, reply: true, follow: true, mention: true };
+  try {
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (type) type, enabled
+      FROM pulse_notification_prefs
+      WHERE user_id = $1
+      ORDER BY type, id DESC
+    `, [userId]);
+    for (const row of rows) {
+      if (row.type in settings) settings[row.type] = row.enabled;
+    }
+  } catch (err) {
+    console.error('getNotifSettings error (non-fatal):', err.message);
+  }
+  return settings;
+}
+
 // Best-effort notification insert. Never notify yourself. Fire-and-forget:
 // a notification failure must never break the primary write.
-async function createNotification({ recipientId, actorId, actorUsername, type, pulseId, commentId }) {
+//
+// The recipient's settings are checked first: a disabled type never creates
+// a notification. When it passes, the notification row and its event row for
+// Homeroom (see pulse_notification_events) are written in one statement, so
+// they appear together or not at all.
+async function createNotification({ recipientId, recipientUsername, actorId, actorUsername, type, pulseId, commentId }) {
   if (!recipientId || recipientId === actorId) return;
   try {
+    const pref = await pool.query(
+      'SELECT enabled FROM pulse_notification_prefs WHERE user_id = $1 AND type = $2 ORDER BY id DESC LIMIT 1',
+      [recipientId, type]
+    );
+    if (pref.rows.length && pref.rows[0].enabled === false) return;
     await pool.query(`
-      INSERT INTO pulse_notifications
-        (user_id, type, actor_id, actor_username, pulse_id, comment_id)
-      VALUES ($1, $2, $3, $4, $5, $6)
-    `, [recipientId, type, actorId, actorUsername, pulseId || null, commentId || null]);
+      WITH n AS (
+        INSERT INTO pulse_notifications
+          (user_id, type, actor_id, actor_username, pulse_id, comment_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, created_at
+      )
+      INSERT INTO pulse_notification_events
+        (notification_id, type, actor_id, actor_username, recipient_id, recipient_username, pulse_id, comment_id, created_at)
+      SELECT n.id, $2, $3, $4, $1, $7, $5, $6, n.created_at FROM n
+    `, [recipientId, type, actorId, actorUsername, pulseId || null, commentId || null,
+        recipientUsername || '']);
   } catch (err) {
     console.error('createNotification error (non-fatal):', err.message);
   }
@@ -91,14 +131,16 @@ async function notifyMentions({ content, actorId, actorUsername, pulseId, commen
     notified.add(actorId);
     for (const handle of handles) {
       const { rows } = await pool.query(
-        'SELECT user_id FROM pulses WHERE lower(username) = $1 AND deleted_at IS NULL LIMIT 1',
+        'SELECT user_id, username FROM pulses WHERE lower(username) = $1 AND deleted_at IS NULL LIMIT 1',
         [handle]
       );
       const recipientId = rows[0]?.user_id;
       if (!recipientId || notified.has(recipientId)) continue;
       notified.add(recipientId);
       await createNotification({
-        recipientId, actorId, actorUsername, type: 'mention', pulseId, commentId,
+        recipientId,
+        recipientUsername: rows[0].username,
+        actorId, actorUsername, type: 'mention', pulseId, commentId,
       });
     }
   } catch (err) {
@@ -268,12 +310,13 @@ app.post('/api/pulses/:id/like', async (req, res) => {
     // Only notify on a genuinely new like (not a re-like), and never self-like
     if (ins.rowCount > 0) {
       const owner = await pool.query(
-        'SELECT user_id FROM pulses WHERE id = $1 AND deleted_at IS NULL',
+        'SELECT user_id, username FROM pulses WHERE id = $1 AND deleted_at IS NULL',
         [req.params.id]
       );
       if (owner.rows.length) {
         createNotification({
           recipientId: owner.rows[0].user_id,
+          recipientUsername: owner.rows[0].username,
           actorId: req.user.id,
           actorUsername: req.user.username,
           type: 'like',
@@ -333,7 +376,7 @@ app.post('/api/pulses/:id/comments', async (req, res) => {
       return res.status(400).json({ error: 'Content exceeds 280 characters' });
     }
     const pulseCheck = await pool.query(
-      'SELECT id, user_id FROM pulses WHERE id = $1 AND deleted_at IS NULL',
+      'SELECT id, user_id, username FROM pulses WHERE id = $1 AND deleted_at IS NULL',
       [req.params.id]
     );
     if (!pulseCheck.rows.length) return res.status(404).json({ error: 'Pulse not found' });
@@ -349,6 +392,7 @@ app.post('/api/pulses/:id/comments', async (req, res) => {
     // Notify the pulse owner of the reply (skips self inside createNotification)
     createNotification({
       recipientId: ownerId,
+      recipientUsername: pulseCheck.rows[0].username,
       actorId: req.user.id,
       actorUsername: req.user.username,
       type: 'reply',
@@ -506,6 +550,7 @@ app.post('/api/users/:username/follow', async (req, res) => {
     if (ins.rowCount > 0 && targetId) {
       createNotification({
         recipientId: targetId,
+        recipientUsername: username,
         actorId: req.user.id,
         actorUsername: req.user.username,
         type: 'follow',
@@ -898,6 +943,36 @@ app.post('/api/notifications/read', async (req, res) => {
   }
 });
 
+// Per-type notification settings. GET returns the effective settings (latest
+// pref row per type merged over all-enabled defaults); POST appends one pref
+// row. The table is append-only, so history is preserved and re-toggling just
+// adds rows.
+app.get('/api/notifications/settings', async (req, res) => {
+  try {
+    const settings = await getNotifSettings(req.user.id);
+    res.json({ settings });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/notifications/settings', async (req, res) => {
+  try {
+    const { type, enabled } = req.body || {};
+    if (!NOTIF_TYPES.includes(type) || typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: 'type must be one of ' + NOTIF_TYPES.join(', ') + ' and enabled must be a boolean' });
+    }
+    await pool.query(
+      'INSERT INTO pulse_notification_prefs (user_id, type, enabled) VALUES ($1, $2, $3)',
+      [req.user.id, type, enabled]
+    );
+    const settings = await getNotifSettings(req.user.id);
+    res.json({ settings });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Static & Shell ────────────────────────────────────────────────────────────
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
@@ -999,6 +1074,29 @@ async function start() {
     );
     CREATE INDEX IF NOT EXISTS idx_pulse_notifications_user ON pulse_notifications (user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pulse_notifications_unread ON pulse_notifications (user_id, read_at);
+    CREATE TABLE IF NOT EXISTS pulse_notification_prefs (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      type VARCHAR(20) NOT NULL,
+      enabled BOOLEAN NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_pulse_notification_prefs_user ON pulse_notification_prefs (user_id, type, id DESC);
+    CREATE TABLE IF NOT EXISTS pulse_notification_events (
+      id SERIAL PRIMARY KEY,
+      schema VARCHAR(40) NOT NULL DEFAULT 'pulse.notification.v1',
+      app VARCHAR(40) NOT NULL DEFAULT 'pulse',
+      notification_id INTEGER,
+      type VARCHAR(20) NOT NULL,
+      actor_id INTEGER NOT NULL,
+      actor_username VARCHAR(255) NOT NULL,
+      recipient_id INTEGER NOT NULL,
+      recipient_username VARCHAR(255) NOT NULL,
+      pulse_id INTEGER,
+      comment_id INTEGER,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_pulse_notification_events_created ON pulse_notification_events (created_at);
   `);
   await pool.query(`COMMENT ON TABLE pulse_messages IS 'staging:private'`);
 
@@ -1173,6 +1271,25 @@ async function start() {
         (8000006, 99990001, 'staging-pulse-alice', 99990003, 'staging-pulse-carol',
          'Haha thanks for the follow-back',
          NOW() - INTERVAL '30 minutes', NOW() - INTERVAL '25 minutes')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Notification settings + event outbox demo rows. Eve has "like" switched
+    // off, so a non-default setting exists for review; the outbox events show
+    // the documented pulse.notification.v1 envelope. notification_id is NULL
+    // here because the demo notification rows are created per-tester at
+    // request time (ensureStagingNotificationSeed) and are not real activity.
+    await pool.query(`
+      INSERT INTO pulse_notification_prefs (id, user_id, type, enabled, created_at) VALUES
+        (900001, 99990005, 'like', false, NOW() - INTERVAL '2 hours')
+      ON CONFLICT (id) DO NOTHING
+    `);
+    await pool.query(`
+      INSERT INTO pulse_notification_events
+        (id, notification_id, type, actor_id, actor_username, recipient_id, recipient_username, pulse_id, comment_id, created_at) VALUES
+        (900001, NULL, 'like',   99990002, 'staging-pulse-bob',   99990001, 'staging-pulse-alice', 900001, NULL,      NOW() - INTERVAL '1 hour'),
+        (900002, NULL, 'reply',  99990003, 'staging-pulse-carol', 99990002, 'staging-pulse-bob',   900003, 9000002,   NOW() - INTERVAL '90 minutes'),
+        (900003, NULL, 'follow', 99990003, 'staging-pulse-carol', 99990004, 'staging-pulse-dave',  NULL,   NULL,      NOW() - INTERVAL '80 minutes')
       ON CONFLICT (id) DO NOTHING
     `);
     } catch (seedErr) {
